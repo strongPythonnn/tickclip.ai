@@ -247,19 +247,40 @@ def _sign_pa_request(payload_bytes: bytes, target: str) -> dict[str, str]:
 
 
 async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
-    """Fetch title, image, and similar products from Amazon PA-API."""
+    """
+    Fetch rich product data from Amazon PA-API:
+    - Title, image
+    - All offers with prices, savings, condition, delivery, merchant info
+    - Promotions / deals
+    - Seller ratings
+    - Similar products
+    """
     if not _pa_api_available():
         return None
     partner_tag = os.environ["AMAZON_PARTNER_TAG"]
-    region = os.getenv("AMAZON_REGION", "us-east-1")
     host = "webservices.amazon.com"
     payload = {
         "ItemIds": [asin],
         "Resources": [
             "ItemInfo.Title",
+            "ItemInfo.Features",
+            "ItemInfo.ByLineInfo",
             "Images.Primary.Large",
+            "Offers.Listings.Availability.Message",
+            "Offers.Listings.Availability.Type",
+            "Offers.Listings.Condition",
+            "Offers.Listings.DeliveryInfo.IsAmazonFulfilled",
+            "Offers.Listings.DeliveryInfo.IsFreeShippingEligible",
+            "Offers.Listings.DeliveryInfo.IsPrimeEligible",
+            "Offers.Listings.IsBuyBoxWinner",
+            "Offers.Listings.MerchantInfo",
             "Offers.Listings.Price",
-            "SimilarProducts",
+            "Offers.Listings.ProgramEligibility.IsPrimeExclusive",
+            "Offers.Listings.ProgramEligibility.IsPrimePantry",
+            "Offers.Listings.Promotions",
+            "Offers.Listings.SavingBasis",
+            "Offers.Summaries",
+            "BrowseNodeInfo.BrowseNodes",
         ],
         "PartnerTag": partner_tag,
         "PartnerType": "Associates",
@@ -277,14 +298,175 @@ async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
             resp.raise_for_status()
             data = resp.json()
         item = data.get("ItemsResult", {}).get("Items", [{}])[0]
+
+        # Basic info
         title = item.get("ItemInfo", {}).get("Title", {}).get("DisplayValue")
         image = item.get("Images", {}).get("Primary", {}).get("Large", {}).get("URL")
+        features = item.get("ItemInfo", {}).get("Features", {}).get("DisplayValues", [])
+        brand = item.get("ItemInfo", {}).get("ByLineInfo", {}).get("Brand", {}).get("DisplayValue")
+        manufacturer = item.get("ItemInfo", {}).get("ByLineInfo", {}).get("Manufacturer", {}).get("DisplayValue")
+
+        # Parse all offers/listings
+        offers_data = item.get("Offers", {})
+        listings = offers_data.get("Listings", [])
+        summaries = offers_data.get("Summaries", [])
+
+        amazon_offers: list[dict] = []
+        promotions: list[dict] = []
+
+        for listing in listings:
+            price_info = listing.get("Price", {})
+            saving_basis = listing.get("SavingBasis", {})
+            merchant = listing.get("MerchantInfo", {})
+            delivery = listing.get("DeliveryInfo", {})
+            condition = listing.get("Condition", {})
+            availability = listing.get("Availability", {})
+            promos = listing.get("Promotions", [])
+
+            offer: dict[str, Any] = {
+                "price": price_info.get("Amount"),
+                "currency": price_info.get("Currency", "USD"),
+                "price_display": price_info.get("DisplayAmount"),
+                "condition": condition.get("Value", "New"),
+                "is_buybox": listing.get("IsBuyBoxWinner", False),
+                "is_prime": delivery.get("IsPrimeEligible", False),
+                "is_amazon_fulfilled": delivery.get("IsAmazonFulfilled", False),
+                "free_shipping": delivery.get("IsFreeShippingEligible", False),
+                "merchant_name": merchant.get("Name", "Unknown Seller"),
+                "availability": availability.get("Message", ""),
+                "availability_type": availability.get("Type", ""),
+            }
+
+            # Savings info (was/now pricing)
+            if saving_basis and saving_basis.get("Amount"):
+                was_price = saving_basis["Amount"]
+                now_price = price_info.get("Amount", 0)
+                if was_price > 0 and now_price > 0:
+                    savings_amt = round(was_price - now_price, 2)
+                    savings_pct = round((1 - now_price / was_price) * 100)
+                    offer["was_price"] = was_price
+                    offer["was_price_display"] = saving_basis.get("DisplayAmount")
+                    offer["savings_amount"] = savings_amt
+                    offer["savings_pct"] = savings_pct
+
+            amazon_offers.append(offer)
+
+            # Collect promotions
+            for promo in (promos or []):
+                promotions.append({
+                    "type": promo.get("Type", "Promotion"),
+                    "amount": promo.get("DiscountPercent") or promo.get("Amount"),
+                    "message": promo.get("DisplayAmount", ""),
+                })
+
+        # Offer summaries (lowest price per condition)
+        offer_summaries: list[dict] = []
+        for summary in summaries:
+            s_price = summary.get("LowestPrice", {})
+            offer_summaries.append({
+                "condition": summary.get("Condition", {}).get("Value", "New"),
+                "offer_count": summary.get("OfferCount", 0),
+                "lowest_price": s_price.get("Amount"),
+                "lowest_price_display": s_price.get("DisplayAmount"),
+            })
+
+        # Similar products
         similar = []
         for s in item.get("SimilarProducts", [])[:6]:
             similar.append({"asin": s.get("ASIN"), "title": s.get("Title")})
-        return {"title": title, "image": image, "similar": similar}
+
+        return {
+            "title": title,
+            "image": image,
+            "brand": brand,
+            "manufacturer": manufacturer,
+            "features": features[:5],
+            "similar": similar,
+            "offers": amazon_offers,
+            "promotions": promotions,
+            "offer_summaries": offer_summaries,
+        }
     except Exception:
         return None
+
+
+async def search_amazon_deals(query: str) -> list[dict]:
+    """Search Amazon PA-API for deals on similar products."""
+    if not _pa_api_available():
+        return []
+    partner_tag = os.environ["AMAZON_PARTNER_TAG"]
+    host = "webservices.amazon.com"
+    payload = {
+        "Keywords": query,
+        "SearchIndex": "All",
+        "ItemCount": 5,
+        "Resources": [
+            "ItemInfo.Title",
+            "Images.Primary.Small",
+            "Offers.Listings.Price",
+            "Offers.Listings.SavingBasis",
+            "Offers.Listings.DeliveryInfo.IsPrimeEligible",
+            "Offers.Listings.Promotions",
+            "Offers.Listings.MerchantInfo",
+        ],
+        "PartnerTag": partner_tag,
+        "PartnerType": "Associates",
+        "Marketplace": "www.amazon.com",
+    }
+    payload_bytes = json.dumps(payload).encode()
+    headers = _sign_pa_request(payload_bytes, "SearchItems")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"https://{host}/paapi5/searchitems",
+                content=payload_bytes,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        results: list[dict] = []
+        for item in data.get("SearchResult", {}).get("Items", [])[:5]:
+            asin = item.get("ASIN", "")
+            title = item.get("ItemInfo", {}).get("Title", {}).get("DisplayValue", "")
+            img = item.get("Images", {}).get("Primary", {}).get("Small", {}).get("URL", "")
+            listing = (item.get("Offers", {}).get("Listings") or [{}])[0]
+            price = listing.get("Price", {})
+            saving_basis = listing.get("SavingBasis", {})
+            merchant = listing.get("MerchantInfo", {})
+            is_prime = listing.get("DeliveryInfo", {}).get("IsPrimeEligible", False)
+            promos = listing.get("Promotions", [])
+
+            deal: dict[str, Any] = {
+                "asin": asin,
+                "title": title,
+                "image": img,
+                "url": f"https://www.amazon.com/dp/{asin}?tag={partner_tag}",
+                "price": price.get("Amount"),
+                "price_display": price.get("DisplayAmount"),
+                "merchant": merchant.get("Name", ""),
+                "is_prime": is_prime,
+                "source": "amazon.com",
+                "retailer_name": "Amazon",
+                "retailer_color": "#ff9900",
+                "category": "deal",
+            }
+
+            if saving_basis and saving_basis.get("Amount") and price.get("Amount"):
+                was = saving_basis["Amount"]
+                now = price["Amount"]
+                if was > now > 0:
+                    deal["was_price"] = was
+                    deal["was_price_display"] = saving_basis.get("DisplayAmount")
+                    deal["savings_pct"] = round((1 - now / was) * 100)
+
+            for promo in (promos or []):
+                deal["promo"] = promo.get("DisplayAmount") or promo.get("Type", "")
+
+            results.append(deal)
+        return results
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------

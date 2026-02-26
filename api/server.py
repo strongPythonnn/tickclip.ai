@@ -21,6 +21,7 @@ from api.utils import (
     fetch_keepa,
     fetch_retailer_prices,
     fetch_reviews,
+    search_amazon_deals,
     search_keepa,
 )
 
@@ -103,11 +104,21 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
 
     # 2. Optional Amazon PA-API enrichment
     amazon = await enrich_from_amazon(asin)
+    amazon_offers: list[dict] = []
+    amazon_promotions: list[dict] = []
+    amazon_offer_summaries: list[dict] = []
+    amazon_features: list[str] = []
+    brand = None
     if amazon:
         if amazon.get("title"):
             keepa["title"] = amazon["title"]
         if amazon.get("image"):
             keepa["image"] = amazon["image"]
+        amazon_offers = amazon.get("offers", [])
+        amazon_promotions = amazon.get("promotions", [])
+        amazon_offer_summaries = amazon.get("offer_summaries", [])
+        amazon_features = amazon.get("features", [])
+        brand = amazon.get("brand") or amazon.get("manufacturer")
 
     # 3. Decision engine (includes manipulation analysis)
     decision_result = compute_decision(
@@ -119,23 +130,16 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         keepa.get("price_manipulation"),
     )
 
-    # 4. Fetch everything in parallel
+    # 4. Fetch everything in parallel — always fetch all sections
     import asyncio
-
-    async def _empty_list() -> list:
-        return []
-
-    async def _empty_dict() -> dict:
-        return {"reviews": [], "summary": {}}
-
-    is_clip_skip = decision_result["decision"] in ("CLIP", "SKIP")
 
     results = await asyncio.gather(
         fetch_retailer_prices(keepa["title"]),
         fetch_deals(keepa["title"]),
         fetch_reviews(keepa["title"]),
-        fetch_alternatives(keepa["title"]) if is_clip_skip else _empty_list(),
-        fetch_diy_articles(keepa["title"]) if is_clip_skip else _empty_list(),
+        fetch_alternatives(keepa["title"]),
+        fetch_diy_articles(keepa["title"]),
+        search_amazon_deals(keepa["title"]),
         return_exceptions=True,
     )
 
@@ -144,11 +148,14 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
     review_data = results[2] if isinstance(results[2], dict) else {"reviews": [], "summary": {}}
     alternatives = results[3] if isinstance(results[3], list) else []
     diy_articles = results[4] if isinstance(results[4], list) else []
+    amazon_deals = results[5] if isinstance(results[5], list) else []
 
     return {
         "asin": asin,
         "title": keepa["title"],
         "image": keepa["image"],
+        "brand": brand,
+        "features": amazon_features,
         "current_price": keepa["current_price"],
         "currency": keepa["currency"],
         "hist_low": keepa["hist_low"],
@@ -160,6 +167,10 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         "explanation": decision_result["explanation"],
         "price_series": keepa["price_series"],
         "price_manipulation": keepa.get("price_manipulation", {}),
+        "amazon_offers": amazon_offers,
+        "amazon_promotions": amazon_promotions,
+        "amazon_offer_summaries": amazon_offer_summaries,
+        "amazon_deals": amazon_deals,
         "retailer_prices": retailer_prices,
         "deals": deals,
         "review_analysis": review_data,

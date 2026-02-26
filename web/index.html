@@ -256,6 +256,43 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
 .tactic-desc { font-size: .78rem; color: #374151; line-height: 1.45; }
 .tactic-evidence { font-size: .7rem; color: #9ca3af; margin-top: 4px; }
 
+/* ── Amazon offers ── */
+.offer-item {
+  padding: 10px 12px; border: 1px solid #f3f4f6; border-radius: 8px; margin-bottom: 6px;
+}
+.offer-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px; }
+.offer-price { font-size: .95rem; font-weight: 700; }
+.offer-was { font-size: .78rem; color: #9ca3af; text-decoration: line-through; }
+.offer-save { font-size: .68rem; font-weight: 600; color: #dc2626; background: #fee2e2;
+  padding: 1px 6px; border-radius: 4px; }
+.offer-prime { font-size: .6rem; font-weight: 700; color: #00485a; background: #cff4fc;
+  padding: 1px 6px; border-radius: 4px; }
+.offer-badge { font-size: .6rem; font-weight: 600; padding: 1px 6px; border-radius: 4px; }
+.offer-badge.buybox { background: #fef3c7; color: #92400e; }
+.offer-badge.fba { background: #dbeafe; color: #1e40af; }
+.offer-merchant { font-size: .72rem; color: #6b7280; }
+.offer-avail { font-size: .7rem; color: #9ca3af; }
+.promo-tag { display: inline-block; font-size: .7rem; padding: 2px 8px; border-radius: 4px;
+  background: #fef3c7; color: #92400e; font-weight: 600; margin: 2px 2px 2px 0; }
+.features-list { margin: 8px 0 0; padding: 0; list-style: none; }
+.features-list li { font-size: .76rem; color: #374151; padding: 3px 0; border-bottom: 1px solid #f3f4f6;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.brand-label { font-size: .76rem; color: #6b7280; margin-bottom: 4px; }
+
+/* Amazon deal card in grid */
+.amz-deal {
+  display: block; padding: 12px 14px; border: 1px solid #e5e7eb; border-radius: 10px;
+  background: #fff; transition: box-shadow .15s; text-decoration: none; color: inherit;
+}
+.amz-deal:hover { box-shadow: 0 2px 10px rgba(0,0,0,.06); text-decoration: none; }
+.amz-deal-top { display: flex; gap: 10px; margin-bottom: 6px; }
+.amz-deal-img { width: 48px; height: 48px; object-fit: contain; border-radius: 6px;
+  background: #f9fafb; border: 1px solid #f3f4f6; flex-shrink: 0; }
+.amz-deal-info { flex: 1; min-width: 0; }
+.amz-deal-title { font-size: .8rem; font-weight: 600; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.amz-deal-prices { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+
 /* ── Promise ── */
 .promise {
   margin: 28px auto; max-width: 540px; text-align: center;
@@ -383,7 +420,9 @@ function render(d) {
   // Product
   h += `<div class="prod">`;
   if (d.image) h += `<img src="${d.image}" alt="" />`;
-  h += `<div><h2>${esc(d.title)}</h2><span class="asin">${d.asin}</span></div></div>`;
+  h += `<div><h2>${esc(d.title)}</h2>`;
+  if (d.brand) h += `<span class="brand-label">by ${esc(d.brand)}</span> `;
+  h += `<span class="asin">${d.asin}</span></div></div>`;
 
   // Metrics
   const rk = d.seller_risk==='low'?'gd':d.seller_risk==='high'?'bd':'wn';
@@ -503,12 +542,87 @@ function render(d) {
     h += `</div></div>`;
   }
 
+  // Amazon Offers (from PA-API)
+  if (d.amazon_offers && d.amazon_offers.length) {
+    h += `<div class="side-section"><h3>Amazon Offers<span class="cnt">${d.amazon_offers.length}</span></h3>`;
+    d.amazon_offers.forEach(o => {
+      h += `<div class="offer-item"><div class="offer-top">`;
+      if (o.price_display) h += `<span class="offer-price">${esc(o.price_display)}</span>`;
+      if (o.was_price_display) h += `<span class="offer-was">${esc(o.was_price_display)}</span>`;
+      if (o.savings_pct) h += `<span class="offer-save">-${o.savings_pct}%</span>`;
+      if (o.is_prime) h += `<span class="offer-prime">Prime</span>`;
+      if (o.is_buybox) h += `<span class="offer-badge buybox">Buy Box</span>`;
+      if (o.is_amazon_fulfilled) h += `<span class="offer-badge fba">FBA</span>`;
+      h += `</div>`;
+      if (o.merchant_name) h += `<div class="offer-merchant">Sold by ${esc(o.merchant_name)}${o.condition!=='New'?' &middot; '+esc(o.condition):''}</div>`;
+      if (o.availability) h += `<div class="offer-avail">${esc(o.availability)}</div>`;
+      h += `</div>`;
+    });
+
+    // Promotions
+    if (d.amazon_promotions && d.amazon_promotions.length) {
+      h += `<div style="margin-top:8px">`;
+      d.amazon_promotions.forEach(p => {
+        h += `<span class="promo-tag">${esc(p.message || p.type)}</span>`;
+      });
+      h += `</div>`;
+    }
+
+    // Offer summaries
+    if (d.amazon_offer_summaries && d.amazon_offer_summaries.length) {
+      h += `<div style="margin-top:8px;font-size:.72rem;color:#6b7280">`;
+      d.amazon_offer_summaries.forEach(s => {
+        if (s.lowest_price_display) {
+          h += `<div>${esc(s.condition)}: ${s.offer_count} offers from ${esc(s.lowest_price_display)}</div>`;
+        }
+      });
+      h += `</div>`;
+    }
+
+    h += `</div>`;
+  }
+
+  // Product features (from Amazon)
+  if (d.features && d.features.length) {
+    h += `<div class="side-section"><h3>Key Features</h3>`;
+    h += `<ul class="features-list">`;
+    d.features.forEach(f => h += `<li>${esc(f)}</li>`);
+    h += `</ul></div>`;
+  }
+
   h += `</div>`; // sidebar
   h += `</div>`; // layout
 
-  // ── Full-width sections: alternatives + DIY ──
-  if (d.alternatives && d.alternatives.length) {
+  // ── Full-width sections ──
+
+  // Amazon Deals (from PA-API search)
+  if (d.amazon_deals && d.amazon_deals.length) {
     h += `<div class="section" style="margin-top:24px">`;
+    h += `<div class="section-hdr"><h3>Amazon Deals on Similar Products</h3><span class="cnt">${d.amazon_deals.length} found</span></div>`;
+    h += `<div class="source-grid">`;
+    d.amazon_deals.forEach(a => {
+      h += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="amz-deal">
+        <div class="amz-deal-top">
+          ${a.image?`<img class="amz-deal-img" src="${a.image}" alt=""/>`:''}
+          <div class="amz-deal-info">
+            <div class="amz-deal-title">${esc(a.title)}</div>
+            <div class="amz-deal-prices">
+              ${a.price_display?`<span class="offer-price">${esc(a.price_display)}</span>`:''}
+              ${a.was_price_display?`<span class="offer-was">${esc(a.was_price_display)}</span>`:''}
+              ${a.savings_pct?`<span class="offer-save">-${a.savings_pct}%</span>`:''}
+              ${a.is_prime?`<span class="offer-prime">Prime</span>`:''}
+              ${a.promo?`<span class="promo-tag">${esc(a.promo)}</span>`:''}
+            </div>
+          </div>
+        </div>
+        ${a.merchant?`<div style="font-size:.7rem;color:#9ca3af">Sold by ${esc(a.merchant)}</div>`:''}
+      </a>`;
+    });
+    h += `</div></div>`;
+  }
+
+  if (d.alternatives && d.alternatives.length) {
+    h += `<div class="section">`;
     h += `<div class="section-hdr"><h3>Better Alternatives</h3><span class="cnt">${d.alternatives.length} found</span></div>`;
     h += `<div class="source-grid">`;
     d.alternatives.forEach(a => {
