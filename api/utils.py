@@ -89,30 +89,43 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
 
     # Stats block
     stats = product.get("stats", {})
-    current_raw = stats.get("current", [None])[0]
-    if current_raw is None or current_raw < 0:
-        # try marketplace
-        current_list = stats.get("current", [])
-        current_raw = current_list[1] if len(current_list) > 1 and current_list[1] and current_list[1] > 0 else None
 
-    current_price = round(current_raw / 100, 2) if current_raw and current_raw > 0 else None
+    def _safe_int(val) -> int | None:
+        """Extract a positive integer from a value that may be int, list, or None."""
+        if isinstance(val, list):
+            # Keepa sometimes nests lists — dig into first scalar
+            for item in val:
+                result = _safe_int(item)
+                if result is not None:
+                    return result
+            return None
+        if isinstance(val, (int, float)) and val > 0:
+            return int(val)
+        return None
+
+    def _pick_stat(stat_list, *indices) -> int | None:
+        """Try each index in stat_list, return first positive int."""
+        if not isinstance(stat_list, list):
+            return _safe_int(stat_list)
+        for idx in indices:
+            if idx < len(stat_list):
+                result = _safe_int(stat_list[idx])
+                if result is not None:
+                    return result
+        return None
+
+    current_raw = _pick_stat(stats.get("current", []), 0, 1)
+    current_price = round(current_raw / 100, 2) if current_raw else None
 
     # If still no current price, use last point in series
     if current_price is None and series:
         current_price = series[-1]["price"]
 
     # Historical low & avg from stats
-    min_prices = stats.get("min", [])
-    avg_prices = stats.get("avg90", [])
-
-    hist_low_raw = min_prices[0] if min_prices and min_prices[0] and min_prices[0] > 0 else None
-    if hist_low_raw is None and len(min_prices) > 1:
-        hist_low_raw = min_prices[1] if min_prices[1] and min_prices[1] > 0 else None
+    hist_low_raw = _pick_stat(stats.get("min", []), 0, 1)
     hist_low = round(hist_low_raw / 100, 2) if hist_low_raw else None
 
-    avg_90d_raw = avg_prices[0] if avg_prices and avg_prices[0] and avg_prices[0] > 0 else None
-    if avg_90d_raw is None and len(avg_prices) > 1:
-        avg_90d_raw = avg_prices[1] if avg_prices[1] and avg_prices[1] > 0 else None
+    avg_90d_raw = _pick_stat(stats.get("avg90", []), 0, 1)
     avg_90d = round(avg_90d_raw / 100, 2) if avg_90d_raw else None
 
     # Compute hist_low / avg from series if stats didn't provide them
