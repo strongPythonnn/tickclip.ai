@@ -16,22 +16,16 @@ a { color: #2563eb; text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 /* ── Layout ── */
-.container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+.container { max-width: 800px; margin: 0 auto; padding: 0 24px; }
 
 /* ── Header ── */
-header {
-  text-align: center; padding: 64px 0 32px;
-}
-header h1 {
-  font-size: 2.2rem; font-weight: 700; letter-spacing: -0.5px;
-}
-header h1 span { color: #10b981; }
-header p { color: #6b7280; font-size: 1.05rem; margin-top: 8px; }
+header { text-align: center; padding: 56px 0 28px; }
+header h1 { font-size: 2.4rem; font-weight: 700; letter-spacing: -0.5px; }
+header h1 .green { color: #10b981; }
+header p { color: #6b7280; font-size: 1.05rem; margin-top: 6px; }
 
 /* ── Search ── */
-.search-wrap {
-  display: flex; gap: 8px; margin: 32px auto; max-width: 560px;
-}
+.search-wrap { display: flex; gap: 8px; margin: 28px auto; max-width: 580px; }
 .search-wrap input {
   flex: 1; padding: 14px 18px; font-size: 1rem;
   border: 1px solid #d1d5db; border-radius: 10px;
@@ -41,15 +35,13 @@ header p { color: #6b7280; font-size: 1.05rem; margin-top: 8px; }
 .search-wrap button {
   padding: 14px 28px; font-size: 1rem; font-weight: 600;
   background: #1a1a1a; color: #fff; border: none; border-radius: 10px;
-  cursor: pointer; transition: background .15s;
+  cursor: pointer; transition: background .15s; white-space: nowrap;
 }
 .search-wrap button:hover { background: #333; }
 .search-wrap button:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ── Search Results ── */
-.search-results {
-  max-width: 560px; margin: 0 auto 24px; display: flex; flex-direction: column; gap: 6px;
-}
+.search-results { max-width: 580px; margin: 0 auto 24px; display: flex; flex-direction: column; gap: 6px; }
 .search-results button {
   width: 100%; text-align: left; padding: 12px 16px; background: #fff;
   border: 1px solid #e5e7eb; border-radius: 8px; cursor: pointer;
@@ -58,20 +50,23 @@ header p { color: #6b7280; font-size: 1.05rem; margin-top: 8px; }
 .search-results button:hover { background: #f3f4f6; }
 .search-results button code { color: #6b7280; font-size: .82rem; margin-left: 6px; }
 
-/* ── Error / Loading ── */
-.msg {
-  text-align: center; padding: 24px; color: #6b7280; font-size: .95rem;
-}
+/* ── Loading ── */
+.msg { text-align: center; padding: 24px; color: #6b7280; font-size: .95rem; }
 .msg.error { color: #ef4444; }
+.loader { display: inline-block; width: 20px; height: 20px; border: 2px solid #e5e7eb;
+  border-top-color: #10b981; border-radius: 50%; animation: spin .6s linear infinite;
+  vertical-align: middle; margin-right: 8px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── Evaluation Card ── */
+/* ── Eval Card ── */
 .eval-card {
-  background: #fff; border-radius: 14px; padding: 40px 32px;
-  margin: 24px auto 48px; border: 1px solid #e5e7eb;
+  background: #fff; border-radius: 16px; padding: 36px 32px;
+  margin: 20px auto 32px; border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0,0,0,.04);
 }
 
 /* Badge */
-.badge-row { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+.badge-row { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .badge {
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 1.5rem; font-weight: 800; letter-spacing: 1px;
@@ -80,93 +75,126 @@ header p { color: #6b7280; font-size: 1.05rem; margin-top: 8px; }
 .badge.TICK { background: #10b981; }
 .badge.CLIP { background: #f59e0b; }
 .badge.SKIP { background: #ef4444; }
-.confidence { font-size: 1rem; color: #6b7280; font-weight: 500; }
+.confidence-bar { flex: 1; min-width: 140px; }
+.confidence-bar .cb-label { font-size: .78rem; color: #6b7280; margin-bottom: 4px; }
+.confidence-bar .cb-track { height: 8px; background: #f3f4f6; border-radius: 4px; overflow: hidden; }
+.confidence-bar .cb-fill { height: 100%; border-radius: 4px; transition: width .4s; }
 
 /* Product header */
-.product-head { display: flex; gap: 20px; margin-bottom: 28px; align-items: center; }
+.product-head { display: flex; gap: 20px; margin-bottom: 24px; align-items: center; }
 .product-head img {
-  width: 90px; height: 90px; object-fit: contain; border-radius: 8px;
-  background: #f9fafb; border: 1px solid #e5e7eb;
+  width: 96px; height: 96px; object-fit: contain; border-radius: 10px;
+  background: #f9fafb; border: 1px solid #e5e7eb; flex-shrink: 0;
 }
 .product-head h2 { font-size: 1.15rem; font-weight: 600; }
+.product-head .asin-label { color: #9ca3af; font-size: .82rem; display: block; margin-top: 4px; }
 
 /* Metrics grid */
 .metrics {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px; margin-bottom: 28px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px; margin-bottom: 24px;
 }
-.metric {
-  background: #f9fafb; border-radius: 10px; padding: 16px;
-  text-align: center;
-}
-.metric .label { font-size: .78rem; color: #6b7280; text-transform: uppercase; letter-spacing: .5px; }
-.metric .value { font-size: 1.25rem; font-weight: 700; margin-top: 4px; }
+.metric { background: #f9fafb; border-radius: 10px; padding: 14px; text-align: center; }
+.metric .label { font-size: .72rem; color: #6b7280; text-transform: uppercase; letter-spacing: .6px; }
+.metric .value { font-size: 1.2rem; font-weight: 700; margin-top: 4px; }
+.metric .value.good { color: #10b981; }
+.metric .value.warn { color: #f59e0b; }
+.metric .value.bad { color: #ef4444; }
 
 /* Explanation */
-.explanation { margin-bottom: 28px; }
-.explanation h3 { font-size: .95rem; font-weight: 600; margin-bottom: 10px; }
-.explanation ul { list-style: disc; padding-left: 20px; }
-.explanation li { margin-bottom: 6px; font-size: .92rem; color: #374151; }
+.explanation { margin-bottom: 24px; }
+.explanation h3 { font-size: .92rem; font-weight: 600; margin-bottom: 8px; }
+.explanation ul { list-style: none; padding: 0; }
+.explanation li {
+  padding: 8px 12px; margin-bottom: 6px; font-size: .88rem; color: #374151;
+  background: #f9fafb; border-radius: 8px; border-left: 3px solid #d1d5db;
+}
 
 /* Chart */
-.chart-wrap { margin-bottom: 32px; }
-.chart-wrap h3 { font-size: .95rem; font-weight: 600; margin-bottom: 12px; }
+.chart-wrap { margin-bottom: 28px; }
+.chart-wrap h3 { font-size: .92rem; font-weight: 600; margin-bottom: 10px; }
 .chart-wrap svg { width: 100%; height: 220px; }
 
-/* Sections */
-.section { margin-bottom: 32px; }
-.section h3 { font-size: .95rem; font-weight: 600; margin-bottom: 12px; }
-.card-list { display: flex; flex-direction: column; gap: 10px; }
-.card-item {
-  padding: 14px 16px; border: 1px solid #e5e7eb; border-radius: 10px;
-  background: #fff; transition: box-shadow .15s;
+/* ── Section headers ── */
+.section { margin-bottom: 28px; }
+.section-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
 }
-.card-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,.06); }
-.card-item .ci-title { font-weight: 600; font-size: .93rem; }
-.card-item .ci-snippet { font-size: .84rem; color: #6b7280; margin-top: 4px; }
-.card-item .ci-source { font-size: .76rem; color: #9ca3af; margin-top: 4px; }
+.section-header h3 { font-size: .95rem; font-weight: 700; }
+.section-header .count {
+  font-size: .72rem; background: #f3f4f6; color: #6b7280;
+  padding: 2px 8px; border-radius: 10px; font-weight: 500;
+}
 
-/* Promise */
+/* ── Source cards (retailers, deals, alternatives, DIY) ── */
+.source-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.source-card {
+  display: block; padding: 14px 16px; border: 1px solid #e5e7eb; border-radius: 12px;
+  background: #fff; transition: box-shadow .15s, border-color .15s; text-decoration: none; color: inherit;
+}
+.source-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,.07); border-color: #d1d5db; text-decoration: none; }
+.sc-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sc-badge {
+  font-size: .68rem; font-weight: 700; color: #fff; padding: 2px 8px;
+  border-radius: 6px; letter-spacing: .3px; text-transform: uppercase; white-space: nowrap;
+}
+.sc-category {
+  font-size: .65rem; color: #9ca3af; text-transform: uppercase; letter-spacing: .5px;
+  margin-left: auto;
+}
+.sc-title { font-weight: 600; font-size: .88rem; line-height: 1.35; margin-bottom: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sc-snippet { font-size: .8rem; color: #6b7280; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sc-domain { font-size: .7rem; color: #9ca3af; margin-top: 6px; }
+
+/* ── Promise ── */
 .promise {
-  margin: 40px auto; max-width: 560px; text-align: center;
+  margin: 32px auto; max-width: 580px; text-align: center;
   border: 1px solid #d1fae5; background: #ecfdf5; border-radius: 12px;
-  padding: 24px 20px;
+  padding: 20px;
 }
-.promise h4 { font-size: .9rem; font-weight: 700; color: #065f46; margin-bottom: 6px; }
-.promise p { font-size: .85rem; color: #047857; }
+.promise h4 { font-size: .88rem; font-weight: 700; color: #065f46; margin-bottom: 4px; }
+.promise p { font-size: .82rem; color: #047857; }
 
-/* Footer */
-footer { text-align: center; padding: 32px 0; color: #9ca3af; font-size: .8rem; }
+footer { text-align: center; padding: 28px 0; color: #9ca3af; font-size: .78rem; }
 
-/* Back link */
 .back-link {
-  display: inline-block; margin-bottom: 16px; font-size: .88rem;
+  display: inline-block; margin-bottom: 14px; font-size: .86rem;
   color: #6b7280; cursor: pointer;
 }
 .back-link:hover { color: #1a1a1a; }
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .container { padding: 0 16px; }
+  .eval-card { padding: 24px 18px; }
+  .source-grid { grid-template-columns: 1fr; }
+  .product-head img { width: 64px; height: 64px; }
+}
 </style>
 </head>
 <body>
 <div class="container" id="app">
   <header>
-    <h1>Tick<span>Clip</span>.ai</h1>
+    <h1>Tick<span class="green">Clip</span>.ai</h1>
     <p>Fiduciary AI shopping decisions — buy, wait, or skip.</p>
   </header>
 
-  <!-- Search -->
   <div id="search-section">
     <div class="search-wrap">
-      <input id="search-input" type="text" placeholder="Search product or paste Amazon ASIN / URL…" />
+      <input id="search-input" type="text" placeholder="Search product or paste Amazon ASIN / URL..." />
       <button id="search-btn" onclick="doSearch()">Evaluate</button>
     </div>
     <div id="search-results" class="search-results"></div>
     <div id="search-msg" class="msg"></div>
   </div>
 
-  <!-- Evaluation -->
   <div id="eval-section" style="display:none"></div>
 
-  <!-- Promise -->
   <div class="promise">
     <h4>Fiduciary Promise</h4>
     <p>We do not earn from pushing sales. We help you decide: buy, wait, or skip.</p>
@@ -192,9 +220,8 @@ async function doSearch() {
   $btn.disabled = true;
   $results.innerHTML = '';
   $msg.className = 'msg';
-  $msg.textContent = 'Searching…';
+  $msg.innerHTML = '<span class="loader"></span>Searching...';
 
-  // If it looks like an ASIN (10 alphanum uppercase or URL with /dp/), evaluate directly
   const asinMatch = q.match(/^[A-Z0-9]{10}$/) || q.match(/\/(?:dp|gp\/product|ASIN)\/([A-Z0-9]{10})/);
   if (asinMatch) {
     const asin = asinMatch[1] || q;
@@ -209,7 +236,7 @@ async function doSearch() {
     if (!resp.ok) throw new Error(data.detail || 'Search failed');
     $msg.textContent = '';
     const items = data.results || [];
-    if (items.length === 0) { $msg.textContent = 'No results found.'; return; }
+    if (!items.length) { $msg.textContent = 'No results found.'; return; }
     items.forEach(item => {
       const btn = document.createElement('button');
       btn.innerHTML = `${item.title || 'Product'} <code>${item.asin}</code>`;
@@ -227,7 +254,7 @@ async function doSearch() {
 async function doEvaluate(asin) {
   $search.style.display = 'none';
   $eval.style.display = '';
-  $eval.innerHTML = '<div class="msg">Evaluating product…</div>';
+  $eval.innerHTML = '<div class="msg"><span class="loader"></span>Evaluating product across multiple sources...</div>';
 
   try {
     const resp = await fetch(`${API}/api/evaluate?asin=${asin}`);
@@ -247,75 +274,98 @@ function goBack() {
 }
 
 function renderEval(d) {
-  let html = `<span class="back-link" onclick="goBack()">&#8592; Back to search</span>`;
-  html += `<div class="eval-card">`;
+  let h = `<span class="back-link" onclick="goBack()">&#8592; Back to search</span>`;
+  h += `<div class="eval-card">`;
 
-  // Badge
-  html += `<div class="badge-row">
+  // Badge + confidence bar
+  const confColor = d.decision === 'TICK' ? '#10b981' : d.decision === 'CLIP' ? '#f59e0b' : '#ef4444';
+  h += `<div class="badge-row">
     <span class="badge ${d.decision}">${d.decision}</span>
-    <span class="confidence">Confidence: ${d.confidence}%</span>
+    <div class="confidence-bar">
+      <div class="cb-label">Confidence ${d.confidence}%</div>
+      <div class="cb-track"><div class="cb-fill" style="width:${d.confidence}%;background:${confColor}"></div></div>
+    </div>
   </div>`;
 
   // Product
-  html += `<div class="product-head">`;
-  if (d.image) html += `<img src="${d.image}" alt="" />`;
-  html += `<div><h2>${esc(d.title)}</h2><span style="color:#9ca3af;font-size:.82rem">${d.asin}</span></div></div>`;
+  h += `<div class="product-head">`;
+  if (d.image) h += `<img src="${d.image}" alt="" />`;
+  h += `<div><h2>${esc(d.title)}</h2><span class="asin-label">${d.asin}</span></div></div>`;
 
   // Metrics
-  html += `<div class="metrics">
+  const riskClass = d.seller_risk === 'low' ? 'good' : d.seller_risk === 'high' ? 'bad' : 'warn';
+  const volClass = d.volatility_score < 0.08 ? 'good' : d.volatility_score >= 0.15 ? 'bad' : 'warn';
+  h += `<div class="metrics">
     <div class="metric"><div class="label">Current</div><div class="value">$${fmt(d.current_price)}</div></div>
-    <div class="metric"><div class="label">Historic Low</div><div class="value">$${fmt(d.hist_low)}</div></div>
+    <div class="metric"><div class="label">Historic Low</div><div class="value good">$${fmt(d.hist_low)}</div></div>
     <div class="metric"><div class="label">90-Day Avg</div><div class="value">$${fmt(d.avg_90d)}</div></div>
-    <div class="metric"><div class="label">Volatility</div><div class="value">${d.volatility_score != null ? (d.volatility_score * 100).toFixed(1) + '%' : '—'}</div></div>
-    <div class="metric"><div class="label">Seller Risk</div><div class="value" style="text-transform:capitalize">${d.seller_risk}</div></div>
+    <div class="metric"><div class="label">Volatility</div><div class="value ${volClass}">${d.volatility_score != null ? (d.volatility_score * 100).toFixed(1) + '%' : '—'}</div></div>
+    <div class="metric"><div class="label">Seller Risk</div><div class="value ${riskClass}" style="text-transform:capitalize">${d.seller_risk}</div></div>
   </div>`;
 
   // Explanation
   if (d.explanation && d.explanation.length) {
-    html += `<div class="explanation"><h3>Analysis</h3><ul>`;
-    d.explanation.forEach(e => { html += `<li>${esc(e)}</li>`; });
-    html += `</ul></div>`;
+    h += `<div class="explanation"><h3>Analysis</h3><ul>`;
+    d.explanation.forEach(e => { h += `<li>${esc(e)}</li>`; });
+    h += `</ul></div>`;
   }
 
   // Chart
   if (d.price_series && d.price_series.length > 1) {
-    html += `<div class="chart-wrap"><h3>Price History</h3>${buildChart(d.price_series)}</div>`;
+    h += `<div class="chart-wrap"><h3>Price History</h3>${buildChart(d.price_series, confColor)}</div>`;
   }
 
-  html += `</div>`; // end eval-card
+  h += `</div>`; // end eval-card
 
-  // Alternatives
+  // Retailer prices — always shown
+  if (d.retailer_prices && d.retailer_prices.length) {
+    h += renderSourceSection('Compare Across Retailers', d.retailer_prices, 'retailer');
+  }
+
+  // Deals & coupons — always shown
+  if (d.deals && d.deals.length) {
+    h += renderSourceSection('Deals & Coupons', d.deals, 'deal');
+  }
+
+  // Alternatives — CLIP/SKIP only
   if (d.alternatives && d.alternatives.length) {
-    html += `<div class="section"><h3>Better Alternatives</h3><div class="card-list">`;
-    d.alternatives.forEach(a => {
-      html += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="card-item">
-        <div class="ci-title">${esc(a.title)}</div>
-        ${a.snippet ? `<div class="ci-snippet">${esc(a.snippet)}</div>` : ''}
-        <div class="ci-source">${esc(a.source)}</div>
-      </a>`;
-    });
-    html += `</div></div>`;
+    h += renderSourceSection('Better Alternatives', d.alternatives, 'alternative');
   }
 
-  // DIY
+  // DIY — CLIP/SKIP only
   if (d.diy_articles && d.diy_articles.length) {
-    html += `<div class="section"><h3>DIY / Repair / Substitutes</h3><div class="card-list">`;
-    d.diy_articles.forEach(a => {
-      html += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="card-item">
-        <div class="ci-title">${esc(a.title)}</div>
-        ${a.snippet ? `<div class="ci-snippet">${esc(a.snippet)}</div>` : ''}
-        <div class="ci-source">${esc(a.source)}</div>
-      </a>`;
-    });
-    html += `</div></div>`;
+    h += renderSourceSection('DIY / Repair / Substitutes', d.diy_articles, 'diy');
   }
 
-  $eval.innerHTML = html;
+  $eval.innerHTML = h;
+}
+
+function renderSourceSection(title, items, fallbackCategory) {
+  let h = `<div class="section">
+    <div class="section-header"><h3>${title}</h3><span class="count">${items.length} found</span></div>
+    <div class="source-grid">`;
+  items.forEach(a => {
+    const cat = a.category || fallbackCategory;
+    const catLabels = { retailer: 'Retailer', deal: 'Deal', alternative: 'Alternative', diy: 'DIY' };
+    const color = a.retailer_color || '#6b7280';
+    const name = a.retailer_name || a.source || '';
+    h += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="source-card">
+      <div class="sc-top">
+        <span class="sc-badge" style="background:${color}">${esc(name)}</span>
+        <span class="sc-category">${catLabels[cat] || cat}</span>
+      </div>
+      <div class="sc-title">${esc(a.title)}</div>
+      ${a.snippet ? `<div class="sc-snippet">${esc(a.snippet)}</div>` : ''}
+      <div class="sc-domain">${esc(a.source)}</div>
+    </a>`;
+  });
+  h += `</div></div>`;
+  return h;
 }
 
 /* ── SVG chart ── */
-function buildChart(series) {
-  const W = 640, H = 200, PL = 50, PR = 16, PT = 12, PB = 28;
+function buildChart(series, color) {
+  const W = 700, H = 210, PL = 52, PR = 16, PT = 14, PB = 28;
   const cw = W - PL - PR, ch = H - PT - PB;
   const prices = series.map(p => p.price);
   const mn = Math.min(...prices), mx = Math.max(...prices);
@@ -330,7 +380,6 @@ function buildChart(series) {
   const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
   const area = line + ` L${pts[pts.length-1].x.toFixed(1)},${PT+ch} L${pts[0].x.toFixed(1)},${PT+ch} Z`;
 
-  // Y axis labels
   const ySteps = 4;
   let yLabels = '';
   for (let i = 0; i <= ySteps; i++) {
@@ -340,18 +389,19 @@ function buildChart(series) {
     yLabels += `<line x1="${PL}" x2="${PL+cw}" y1="${y}" y2="${y}" stroke="#f3f4f6" />`;
   }
 
-  // X axis labels (first, mid, last)
   const xIdxs = [0, Math.floor(series.length/2), series.length-1];
   let xLabels = '';
   xIdxs.forEach(i => {
     xLabels += `<text x="${pts[i].x}" y="${H-4}" text-anchor="middle" fill="#9ca3af" font-size="11">${series[i].date.slice(0,7)}</text>`;
   });
 
+  const c = color || '#10b981';
   return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
     ${yLabels}${xLabels}
-    <path d="${area}" fill="rgba(16,185,129,0.08)" />
-    <path d="${line}" fill="none" stroke="#10b981" stroke-width="2" stroke-linejoin="round" />
-    <circle cx="${pts[pts.length-1].x}" cy="${pts[pts.length-1].y}" r="4" fill="#10b981" />
+    <path d="${area}" fill="${c}" fill-opacity="0.07" />
+    <path d="${line}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round" />
+    <circle cx="${pts[pts.length-1].x}" cy="${pts[pts.length-1].y}" r="4.5" fill="${c}" />
+    <circle cx="${pts[pts.length-1].x}" cy="${pts[pts.length-1].y}" r="8" fill="${c}" fill-opacity="0.15" />
   </svg>`;
 }
 

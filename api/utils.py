@@ -383,49 +383,173 @@ def compute_decision(
 # DuckDuckGo web search (HTML scraping — no API key needed)
 # ---------------------------------------------------------------------------
 
-async def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
+import re as _re
+from urllib.parse import urlparse as _urlparse
+import asyncio
+
+
+_DDG_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+
+async def _ddg_search(query: str, max_results: int = 8) -> list[dict]:
     """Scrape DuckDuckGo HTML search results."""
     results: list[dict] = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
     try:
         async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
             resp = await client.get(
                 "https://html.duckduckgo.com/html/",
                 params={"q": query},
-                headers=headers,
+                headers=_DDG_HEADERS,
             )
             resp.raise_for_status()
             html = resp.text
 
-        # Simple parsing — extract result blocks
-        import re
-        # Each result link
-        links = re.findall(r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>', html)
-        snippets = re.findall(r'<a class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
+        links = _re.findall(r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>', html)
+        snippets = _re.findall(r'<a class="result__snippet"[^>]*>(.*?)</a>', html, _re.DOTALL)
 
         for idx, (url, raw_title) in enumerate(links[:max_results]):
-            title = re.sub(r"<[^>]+>", "", raw_title).strip()
+            title = _re.sub(r"<[^>]+>", "", raw_title).strip()
             snippet = ""
             if idx < len(snippets):
-                snippet = re.sub(r"<[^>]+>", "", snippets[idx]).strip()
-            # Extract source domain
-            from urllib.parse import urlparse
-            source = urlparse(url).netloc.replace("www.", "")
+                snippet = _re.sub(r"<[^>]+>", "", snippets[idx]).strip()
+            source = _urlparse(url).netloc.replace("www.", "")
             results.append({"title": title, "url": url, "snippet": snippet, "source": source})
     except Exception:
         pass
     return results
 
 
+# ---------------------------------------------------------------------------
+# Multi-source retailer & deal searches
+# ---------------------------------------------------------------------------
+
+# Retailer-specific site searches
+_RETAILER_QUERIES = {
+    "walmart": "site:walmart.com {product} buy",
+    "bestbuy": "site:bestbuy.com {product}",
+    "target": "site:target.com {product}",
+    "costco": "site:costco.com {product}",
+    "newegg": "site:newegg.com {product}",
+}
+
+# Deal site searches
+_DEAL_QUERIES = {
+    "slickdeals": "site:slickdeals.net {product} deal",
+    "retailmenot": "site:retailmenot.com {product} coupon",
+    "groupon": "site:groupon.com {product}",
+    "camelcamelcamel": "site:camelcamelcamel.com {product}",
+    "honey": "site:joinhoney.com {product}",
+}
+
+# Retailer display names & colors (sent to frontend)
+RETAILER_META = {
+    "walmart.com": {"name": "Walmart", "color": "#0071dc"},
+    "bestbuy.com": {"name": "Best Buy", "color": "#0046be"},
+    "target.com": {"name": "Target", "color": "#cc0000"},
+    "costco.com": {"name": "Costco", "color": "#e31837"},
+    "newegg.com": {"name": "Newegg", "color": "#f7821b"},
+    "amazon.com": {"name": "Amazon", "color": "#ff9900"},
+    "slickdeals.net": {"name": "Slickdeals", "color": "#2e8540"},
+    "retailmenot.com": {"name": "RetailMeNot", "color": "#e22a2a"},
+    "groupon.com": {"name": "Groupon", "color": "#53a318"},
+    "camelcamelcamel.com": {"name": "CamelCamelCamel", "color": "#884499"},
+    "joinhoney.com": {"name": "Honey", "color": "#ff6801"},
+    "ebay.com": {"name": "eBay", "color": "#e53238"},
+}
+
+
+def _enrich_result(item: dict, category: str) -> dict:
+    """Add retailer metadata and category tag to a search result."""
+    domain = item.get("source", "")
+    # Match against known retailers
+    meta = None
+    for key, val in RETAILER_META.items():
+        if key in domain:
+            meta = val
+            break
+    item["retailer_name"] = meta["name"] if meta else domain.split(".")[0].title()
+    item["retailer_color"] = meta["color"] if meta else "#6b7280"
+    item["category"] = category  # "retailer", "deal", "alternative", "diy"
+    return item
+
+
+async def _search_source(query_template: str, product: str, category: str, max_results: int = 3) -> list[dict]:
+    """Run a single site-scoped search and tag results."""
+    query = query_template.format(product=product)
+    results = await _ddg_search(query, max_results)
+    return [_enrich_result(r, category) for r in results]
+
+
+async def fetch_retailer_prices(product_title: str) -> list[dict]:
+    """
+    Search across Walmart, Best Buy, Target, Costco, Newegg for the product.
+    Returns tagged results from each retailer.
+    """
+    tasks = [
+        _search_source(tpl, product_title, "retailer", 2)
+        for tpl in _RETAILER_QUERIES.values()
+    ]
+    groups = await asyncio.gather(*tasks, return_exceptions=True)
+    combined: list[dict] = []
+    for group in groups:
+        if isinstance(group, list):
+            combined.extend(group)
+    return combined
+
+
+async def fetch_deals(product_title: str) -> list[dict]:
+    """
+    Search Slickdeals, RetailMeNot, Groupon, CamelCamelCamel, Honey.
+    Returns tagged deal results.
+    """
+    tasks = [
+        _search_source(tpl, product_title, "deal", 2)
+        for tpl in _DEAL_QUERIES.values()
+    ]
+    groups = await asyncio.gather(*tasks, return_exceptions=True)
+    combined: list[dict] = []
+    for group in groups:
+        if isinstance(group, list):
+            combined.extend(group)
+    return combined
+
+
 async def fetch_alternatives(product_title: str) -> list[dict]:
-    """Search for alternative products."""
-    query = f"{product_title} alternatives best buy"
-    return await _ddg_search(query, 6)
+    """Search for alternative products across the web."""
+    queries = [
+        f"{product_title} best alternative 2025",
+        f"{product_title} vs competitor comparison",
+    ]
+    tasks = [_ddg_search(q, 4) for q in queries]
+    groups = await asyncio.gather(*tasks, return_exceptions=True)
+    combined: list[dict] = []
+    seen_urls: set[str] = set()
+    for group in groups:
+        if isinstance(group, list):
+            for item in group:
+                if item["url"] not in seen_urls:
+                    seen_urls.add(item["url"])
+                    combined.append(_enrich_result(item, "alternative"))
+    return combined[:8]
 
 
 async def fetch_diy_articles(product_title: str) -> list[dict]:
     """Search for DIY / repair / substitute articles."""
-    query = f"{product_title} DIY repair substitute guide"
-    return await _ddg_search(query, 6)
+    queries = [
+        f"{product_title} DIY repair guide",
+        f"{product_title} fix yourself instead of buying",
+        f"{product_title} substitute homemade",
+    ]
+    tasks = [_ddg_search(q, 3) for q in queries]
+    groups = await asyncio.gather(*tasks, return_exceptions=True)
+    combined: list[dict] = []
+    seen_urls: set[str] = set()
+    for group in groups:
+        if isinstance(group, list):
+            for item in group:
+                if item["url"] not in seen_urls:
+                    seen_urls.add(item["url"])
+                    combined.append(_enrich_result(item, "diy"))
+    return combined[:8]
