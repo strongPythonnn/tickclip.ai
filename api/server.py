@@ -109,13 +109,14 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         if amazon.get("image"):
             keepa["image"] = amazon["image"]
 
-    # 3. Decision engine
+    # 3. Decision engine (includes manipulation analysis)
     decision_result = compute_decision(
         keepa["current_price"],
         keepa["hist_low"],
         keepa["avg_90d"],
         keepa["volatility_score"],
         keepa["seller_risk"],
+        keepa.get("price_manipulation"),
     )
 
     # 4. Fetch everything in parallel
@@ -158,6 +159,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         "confidence": decision_result["confidence"],
         "explanation": decision_result["explanation"],
         "price_series": keepa["price_series"],
+        "price_manipulation": keepa.get("price_manipulation", {}),
         "retailer_prices": retailer_prices,
         "deals": deals,
         "review_analysis": review_data,

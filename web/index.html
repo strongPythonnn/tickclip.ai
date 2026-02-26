@@ -214,6 +214,48 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
 .sc-snip { font-size: .74rem; color: #6b7280; margin-top: 3px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
+/* ── Manipulation alert ── */
+.manip-card {
+  border-radius: 12px; padding: 18px 20px; margin-bottom: 20px;
+}
+.manip-card.risk-high { background: #fef2f2; border: 1px solid #fecaca; }
+.manip-card.risk-medium { background: #fffbeb; border: 1px solid #fde68a; }
+.manip-card.risk-low { background: #f0fdf4; border: 1px solid #bbf7d0; }
+.manip-card.risk-none { background: #f0fdf4; border: 1px solid #bbf7d0; }
+.manip-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.manip-icon { font-size: 1.3rem; flex-shrink: 0; }
+.manip-title { font-size: .88rem; font-weight: 700; }
+.manip-title.high { color: #dc2626; }
+.manip-title.medium { color: #d97706; }
+.manip-title.low { color: #16a34a; }
+.manip-title.none { color: #16a34a; }
+.manip-score-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.manip-score-track { flex: 1; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; }
+.manip-score-fill { height: 100%; border-radius: 4px; }
+.manip-score-label { font-size: .75rem; color: #6b7280; white-space: nowrap; }
+.manip-prices { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.manip-price {
+  flex: 1; min-width: 100px; padding: 10px 12px; border-radius: 8px;
+  text-align: center; font-size: .78rem;
+}
+.manip-price .mp-label { font-size: .65rem; text-transform: uppercase; letter-spacing: .4px; color: #6b7280; }
+.manip-price .mp-val { font-size: 1rem; font-weight: 700; margin-top: 2px; }
+.manip-price.current-bg { background: #f3f4f6; }
+.manip-price.true-bg { background: #d1fae5; }
+.manip-price.inflated-bg { background: #fee2e2; }
+.tactic-list { display: flex; flex-direction: column; gap: 8px; }
+.tactic-item { padding: 10px 12px; border-radius: 8px; background: #fff; border: 1px solid #e5e7eb; }
+.tactic-name { font-size: .8rem; font-weight: 700; margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
+.tactic-sev {
+  font-size: .6rem; padding: 1px 6px; border-radius: 4px; font-weight: 600;
+  text-transform: uppercase; color: #fff;
+}
+.tactic-sev.high { background: #ef4444; }
+.tactic-sev.medium { background: #f59e0b; }
+.tactic-sev.low { background: #6b7280; }
+.tactic-desc { font-size: .78rem; color: #374151; line-height: 1.45; }
+.tactic-evidence { font-size: .7rem; color: #9ca3af; margin-top: 4px; }
+
 /* ── Promise ── */
 .promise {
   margin: 28px auto; max-width: 540px; text-align: center;
@@ -365,6 +407,9 @@ function render(d) {
   if (d.price_series && d.price_series.length > 1)
     h += `<div class="chart-box"><h3>Price History</h3>${buildChart(d.price_series, cc)}</div>`;
 
+  // Price manipulation analysis
+  h += renderManipulation(d.price_manipulation, d.current_price);
+
   h += `</div>`; // eval-card
   h += `</div>`; // main-col
 
@@ -496,6 +541,76 @@ function render(d) {
   h += `<footer>&copy; 2026 TickClip.ai</footer>`;
 
   $content.innerHTML = h;
+}
+
+/* ── Price manipulation card ── */
+function renderManipulation(pm, currentPrice) {
+  if (!pm || pm.risk_level === undefined) return '';
+  const rl = pm.risk_level; // none, low, medium, high
+  const icons = { none: '\u2705', low: '\u2705', medium: '\u26A0\uFE0F', high: '\uD83D\uDEA8' };
+  const titles = {
+    none: 'No Price Manipulation Detected',
+    low: 'Low Manipulation Risk',
+    medium: 'Price Manipulation Warning',
+    high: 'Price Manipulation Alert',
+  };
+  const scoreColor = pm.score >= 50 ? '#ef4444' : pm.score >= 25 ? '#f59e0b' : '#10b981';
+
+  let h = `<div class="manip-card risk-${rl}">`;
+  h += `<div class="manip-header">
+    <span class="manip-icon">${icons[rl]}</span>
+    <span class="manip-title ${rl}">${titles[rl]}</span>
+  </div>`;
+
+  // Score bar
+  h += `<div class="manip-score-row">
+    <div class="manip-score-track">
+      <div class="manip-score-fill" style="width:${pm.score}%;background:${scoreColor}"></div>
+    </div>
+    <span class="manip-score-label">Risk ${pm.score}/100</span>
+  </div>`;
+
+  // True market price vs current
+  if (pm.true_market_price != null) {
+    h += `<div class="manip-prices">
+      <div class="manip-price current-bg">
+        <div class="mp-label">Listed Price</div>
+        <div class="mp-val">$${fmt(currentPrice)}</div>
+      </div>
+      <div class="manip-price true-bg">
+        <div class="mp-label">True Market Price</div>
+        <div class="mp-val" style="color:#10b981">$${fmt(pm.true_market_price)}</div>
+      </div>`;
+    if (pm.inflated_by_pct != null && pm.inflated_by_pct > 0) {
+      h += `<div class="manip-price inflated-bg">
+        <div class="mp-label">Inflated By</div>
+        <div class="mp-val" style="color:#ef4444">+${pm.inflated_by_pct.toFixed(0)}%</div>
+      </div>`;
+    }
+    h += `</div>`;
+  }
+
+  if (pm.is_fake_deal) {
+    h += `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:.8rem;color:#991b1b;font-weight:600">
+      This \"deal\" appears to be manufactured through price inflation tactics.
+    </div>`;
+  }
+
+  // Tactics
+  if (pm.tactics && pm.tactics.length) {
+    h += `<div class="tactic-list">`;
+    pm.tactics.forEach(t => {
+      h += `<div class="tactic-item">
+        <div class="tactic-name">${esc(t.tactic)} <span class="tactic-sev ${t.severity}">${t.severity}</span></div>
+        <div class="tactic-desc">${esc(t.description)}</div>
+        ${t.evidence ? `<div class="tactic-evidence">${esc(t.evidence)}</div>` : ''}
+      </div>`;
+    });
+    h += `</div>`;
+  }
+
+  h += `</div>`;
+  return h;
 }
 
 /* ── SVG chart ── */

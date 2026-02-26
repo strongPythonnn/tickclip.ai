@@ -157,6 +157,9 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
     elif not amazon_direct:
         seller_risk = "medium"
 
+    # Price manipulation analysis
+    manipulation = detect_price_manipulation(series, current_price, hist_low, avg_90d)
+
     return {
         "title": title,
         "image": image_url,
@@ -167,6 +170,7 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
         "volatility_score": volatility_score,
         "seller_risk": seller_risk,
         "price_series": series,
+        "price_manipulation": manipulation,
     }
 
 
@@ -284,6 +288,214 @@ async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Price manipulation detection
+# ---------------------------------------------------------------------------
+
+def detect_price_manipulation(
+    series: list[dict],
+    current_price: float | None,
+    hist_low: float | None,
+    avg_90d: float | None,
+) -> dict[str, Any]:
+    """
+    Analyze price history for seller manipulation tactics:
+    1. Inflate-then-discount: price spiked recently then "dropped" to seem like a deal
+    2. Artificial reference pricing: current "sale" is actually the normal price
+    3. Yo-yo pricing: repeated spikes/drops to create urgency
+    4. Pre-event inflation: price raised before major sale events (Prime Day, Black Friday)
+    5. Creeping inflation: slow gradual increases over months
+
+    Returns {
+      risk_level: "none" | "low" | "medium" | "high",
+      score: 0-100 (higher = more manipulation detected),
+      tactics: [{tactic, description, evidence, severity}],
+      is_fake_deal: bool,
+      true_market_price: float | None,
+      inflated_by_pct: float | None,
+    }
+    """
+    result: dict[str, Any] = {
+        "risk_level": "none",
+        "score": 0,
+        "tactics": [],
+        "is_fake_deal": False,
+        "true_market_price": None,
+        "inflated_by_pct": None,
+    }
+
+    if not series or len(series) < 5 or current_price is None:
+        return result
+
+    prices = [p["price"] for p in series]
+    dates = [p["date"] for p in series]
+    now_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    manipulation_score = 0
+    tactics: list[dict] = []
+
+    # ── Helpers ──
+    cutoff_30 = (datetime.now(tz=timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    cutoff_60 = (datetime.now(tz=timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+    cutoff_90 = (datetime.now(tz=timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+    cutoff_180 = (datetime.now(tz=timezone.utc) - timedelta(days=180)).strftime("%Y-%m-%d")
+
+    recent_30 = [p for p, d in zip(prices, dates) if d >= cutoff_30]
+    recent_60 = [p for p, d in zip(prices, dates) if d >= cutoff_60]
+    recent_90 = [p for p, d in zip(prices, dates) if d >= cutoff_90]
+    older_half = [p for p, d in zip(prices, dates) if d < cutoff_90]
+
+    # Long-term median (robust against spikes)
+    sorted_all = sorted(prices)
+    median_all = sorted_all[len(sorted_all) // 2]
+
+    # ── TACTIC 1: Inflate-then-discount ──
+    # Price spiked significantly in the last 60 days then dropped to current
+    if recent_60 and len(recent_60) >= 3:
+        max_60 = max(recent_60)
+        if max_60 > median_all * 1.30 and current_price < max_60 * 0.85:
+            pct_spike = round((max_60 / median_all - 1) * 100)
+            pct_drop = round((1 - current_price / max_60) * 100)
+            severity = "high" if pct_spike >= 50 else "medium"
+            manipulation_score += 35 if severity == "high" else 20
+            tactics.append({
+                "tactic": "Inflate-then-Discount",
+                "description": f"Price was inflated to ${max_60:.2f} ({pct_spike}% above median ${median_all:.2f}), then \"dropped\" {pct_drop}% to the current ${current_price:.2f}. The sale looks big but the spike was artificial.",
+                "evidence": f"60-day peak ${max_60:.2f} vs. historic median ${median_all:.2f}",
+                "severity": severity,
+            })
+
+    # ── TACTIC 2: Fake reference price / "sale" is the real price ──
+    # Current price is actually the most common price (mode)
+    if len(prices) >= 10:
+        # Bucket prices to nearest dollar to find mode
+        buckets: dict[int, int] = {}
+        for p in prices:
+            b = round(p)
+            buckets[b] = buckets.get(b, 0) + 1
+        mode_price = max(buckets, key=buckets.get)
+        mode_freq = buckets[mode_price]
+        mode_pct = mode_freq / len(prices)
+
+        if abs(current_price - mode_price) <= 2 and mode_pct >= 0.25:
+            # Current price IS the most common price — any "sale" framing is fake
+            if avg_90d and current_price >= avg_90d * 0.97:
+                manipulation_score += 15
+                tactics.append({
+                    "tactic": "Fake Sale",
+                    "description": f"The current price ${current_price:.2f} is essentially the regular price (most common: ${mode_price}, seen {mode_pct:.0%} of the time). Any \"sale\" or \"discount\" label is misleading.",
+                    "evidence": f"${mode_price} appears in {mode_pct:.0%} of price history",
+                    "severity": "medium",
+                })
+
+    # ── TACTIC 3: Yo-yo pricing (repeated spikes to create urgency) ──
+    if len(recent_90) >= 6:
+        direction_changes = 0
+        for i in range(2, len(recent_90)):
+            prev_dir = recent_90[i-1] - recent_90[i-2]
+            curr_dir = recent_90[i] - recent_90[i-1]
+            if (prev_dir > 0 and curr_dir < 0) or (prev_dir < 0 and curr_dir > 0):
+                # Only count significant changes (>5% of price)
+                if abs(curr_dir) > current_price * 0.05:
+                    direction_changes += 1
+        if direction_changes >= 4:
+            manipulation_score += 25
+            tactics.append({
+                "tactic": "Yo-Yo Pricing",
+                "description": f"Price changed direction {direction_changes} times in 90 days with swings >5%. This creates false urgency — \"buy now before it goes up again.\"",
+                "evidence": f"{direction_changes} significant reversals in 90 days",
+                "severity": "high",
+            })
+        elif direction_changes >= 2:
+            manipulation_score += 10
+            tactics.append({
+                "tactic": "Yo-Yo Pricing",
+                "description": f"Price changed direction {direction_changes} times in 90 days. Moderate price instability that may be used to create urgency.",
+                "evidence": f"{direction_changes} reversals in 90 days",
+                "severity": "low",
+            })
+
+    # ── TACTIC 4: Pre-event inflation ──
+    # Check if there was a spike before known sale events
+    sale_events = [
+        ("07-01", "07-20", "Prime Day"),
+        ("11-15", "11-30", "Black Friday"),
+        ("11-25", "12-02", "Cyber Monday"),
+    ]
+    for start_m, end_m, event_name in sale_events:
+        for yr_offset in range(2):
+            year = datetime.now(tz=timezone.utc).year - yr_offset
+            pre_start = f"{year}-{start_m}"
+            event_end = f"{year}-{end_m}"
+            # 30 days before the event
+            pre_month = (datetime(year, int(start_m.split("-")[0]), 1, tzinfo=timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+
+            pre_prices = [p for p, d in zip(prices, dates) if pre_month <= d < pre_start]
+            event_prices = [p for p, d in zip(prices, dates) if pre_start <= d <= event_end]
+
+            if pre_prices and event_prices:
+                avg_pre = sum(pre_prices) / len(pre_prices)
+                max_pre = max(pre_prices)
+                min_event = min(event_prices)
+                # Was price raised before the event, then "discounted" during it?
+                if max_pre > avg_pre * 1.15 and min_event < max_pre * 0.80:
+                    inflation_pct = round((max_pre / avg_pre - 1) * 100)
+                    manipulation_score += 20
+                    tactics.append({
+                        "tactic": "Pre-Event Inflation",
+                        "description": f"Price was raised {inflation_pct}% before {event_name} {year} (to ${max_pre:.2f}), then \"discounted\" during the event to ${min_event:.2f}. The deal was manufactured.",
+                        "evidence": f"Pre-event avg ${avg_pre:.2f} → spike ${max_pre:.2f} → event \"sale\" ${min_event:.2f}",
+                        "severity": "high",
+                    })
+                    break  # one example per event is enough
+
+    # ── TACTIC 5: Creeping inflation ──
+    if older_half and recent_30:
+        avg_old = sum(older_half) / len(older_half)
+        avg_recent = sum(recent_30) / len(recent_30)
+        if avg_recent > avg_old * 1.15 and avg_old > 0:
+            creep_pct = round((avg_recent / avg_old - 1) * 100)
+            manipulation_score += 15
+            tactics.append({
+                "tactic": "Creeping Inflation",
+                "description": f"Average price has gradually risen {creep_pct}% (from ${avg_old:.2f} to ${avg_recent:.2f}). Small increases over time are harder to notice but add up.",
+                "evidence": f"Older avg ${avg_old:.2f} → Recent avg ${avg_recent:.2f} (+{creep_pct}%)",
+                "severity": "medium" if creep_pct < 25 else "high",
+            })
+
+    # ── Compute true market price ──
+    # Use the median excluding top-10% spike prices
+    cutoff_idx = max(1, int(len(sorted_all) * 0.90))
+    trimmed = sorted_all[:cutoff_idx]
+    true_market = round(sum(trimmed) / len(trimmed), 2) if trimmed else median_all
+
+    inflated_by = None
+    if current_price > true_market and true_market > 0:
+        inflated_by = round((current_price / true_market - 1) * 100, 1)
+
+    # ── Final scoring ──
+    manipulation_score = min(manipulation_score, 100)
+    if manipulation_score >= 50:
+        risk_level = "high"
+    elif manipulation_score >= 25:
+        risk_level = "medium"
+    elif manipulation_score > 0:
+        risk_level = "low"
+    else:
+        risk_level = "none"
+
+    is_fake_deal = any(t["tactic"] in ("Inflate-then-Discount", "Fake Sale", "Pre-Event Inflation")
+                       for t in tactics if t.get("severity") in ("high", "medium"))
+
+    result["risk_level"] = risk_level
+    result["score"] = manipulation_score
+    result["tactics"] = tactics
+    result["is_fake_deal"] = is_fake_deal
+    result["true_market_price"] = true_market
+    result["inflated_by_pct"] = inflated_by
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Fiduciary decision engine
 # ---------------------------------------------------------------------------
 
@@ -293,6 +505,7 @@ def compute_decision(
     avg_90d: float | None,
     volatility_score: float,
     seller_risk: str,
+    manipulation: dict | None = None,
 ) -> dict[str, Any]:
     """
     Deterministic, explainable decision engine.
@@ -375,6 +588,41 @@ def compute_decision(
             explanation.append("Downgraded from CLIP to SKIP due to seller risk.")
     elif seller_risk == "medium":
         explanation.append("Seller risk is MEDIUM — Amazon may not be the direct seller.")
+
+    # Price manipulation
+    if manipulation and manipulation.get("risk_level") in ("medium", "high"):
+        manip_score = manipulation.get("score", 0)
+        is_fake = manipulation.get("is_fake_deal", False)
+        true_price = manipulation.get("true_market_price")
+
+        if is_fake:
+            explanation.append(
+                f"PRICE MANIPULATION DETECTED: This deal appears artificially inflated. "
+                f"True market price is ~${true_price:.2f}." if true_price else
+                "PRICE MANIPULATION DETECTED: This deal appears artificially inflated."
+            )
+            if decision == "TICK":
+                decision = "CLIP"
+                confidence = max(confidence - 20, 30)
+                explanation.append("Downgraded from TICK to CLIP due to suspected price manipulation.")
+            elif decision == "CLIP":
+                confidence = max(confidence - 10, 25)
+        elif manipulation["risk_level"] == "high":
+            explanation.append(
+                "High price manipulation risk detected — seller pricing patterns are suspicious."
+            )
+            if decision == "TICK":
+                decision = "CLIP"
+                confidence = max(confidence - 15, 35)
+                explanation.append("Downgraded from TICK to CLIP due to manipulation risk.")
+        else:
+            explanation.append("Moderate price manipulation signals detected — review the pricing history carefully.")
+
+        if manipulation.get("inflated_by_pct") and manipulation["inflated_by_pct"] > 5:
+            explanation.append(
+                f"Current price may be inflated ~{manipulation['inflated_by_pct']:.0f}% above true market value (${true_price:.2f})." if true_price else
+                f"Current price may be inflated ~{manipulation['inflated_by_pct']:.0f}% above true market value."
+            )
 
     return {"decision": decision, "confidence": confidence, "explanation": explanation}
 
