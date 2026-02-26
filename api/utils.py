@@ -91,15 +91,13 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
     stats = product.get("stats", {})
 
     def _safe_int(val) -> int | None:
-        """Extract a positive integer from a value that may be int, list, or None."""
+        """Extract a positive price (cents) from a value that may be int, list, or None.
+        Keepa sub-arrays are [price, timestamp] — only take the first element.
+        Cap at 5,000,000 (~$50,000) to avoid mistaking timestamps for prices."""
         if isinstance(val, list):
-            # Keepa sometimes nests lists — dig into first scalar
-            for item in val:
-                result = _safe_int(item)
-                if result is not None:
-                    return result
-            return None
-        if isinstance(val, (int, float)) and val > 0:
+            # Keepa [price, timestamp] — only use first element (the price)
+            return _safe_int(val[0]) if val else None
+        if isinstance(val, (int, float)) and 0 < val < 5_000_000:
             return int(val)
         return None
 
@@ -178,17 +176,198 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
 # Keepa search (by keyword)
 # ---------------------------------------------------------------------------
 
+async def search_amazon_products(query: str) -> list[dict]:
+    """Search Amazon PA-API SearchItems for products by keyword.
+    Returns list of {asin, title, image}."""
+    if not _pa_api_available():
+        return []
+    partner_tag = os.environ["AMAZON_PARTNER_TAG"]
+    host = "webservices.amazon.com"
+    payload = {
+        "Keywords": query,
+        "SearchIndex": "All",
+        "ItemCount": 10,
+        "Resources": [
+            "ItemInfo.Title",
+            "Images.Primary.Medium",
+        ],
+        "PartnerTag": partner_tag,
+        "PartnerType": "Associates",
+        "Marketplace": "www.amazon.com",
+    }
+    payload_bytes = json.dumps(payload).encode()
+    headers = _sign_pa_request(payload_bytes, "SearchItems")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"https://{host}/paapi5/searchitems",
+                content=payload_bytes,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        results: list[dict] = []
+        for item in data.get("SearchResult", {}).get("Items", [])[:10]:
+            asin = item.get("ASIN", "")
+            title = item.get("ItemInfo", {}).get("Title", {}).get("DisplayValue", "")
+            img = item.get("Images", {}).get("Primary", {}).get("Medium", {}).get("URL", "")
+            if asin:
+                results.append({"asin": asin, "title": title or None, "image": img or None})
+        return results
+    except Exception:
+        return []
+
+
 async def search_keepa(query: str, api_key: str) -> list[dict]:
-    """Search Keepa for products matching a keyword.  Returns list of {asin, title, image}."""
-    params = {"key": api_key, "domain": 1, "type": "product", "term": query}
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.get(f"{KEEPA_BASE}/search", params=params)
-        resp.raise_for_status()
-        data = resp.json()
-    results = []
-    for asin in (data.get("asinList") or [])[:10]:
-        results.append({"asin": asin, "title": None, "image": None})
+    """Search for products matching a keyword.  Returns list of {asin, title, image}.
+    Priority: Amazon PA-API > Keepa search > DuckDuckGo fallback."""
+
+    # 1. Try Amazon PA-API SearchItems (most reliable)
+    pa_results = await search_amazon_products(query)
+    if pa_results:
+        return pa_results
+
+    # 2. Try Keepa search
+    try:
+        params = {"key": api_key, "domain": 1, "type": "product", "term": query}
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(f"{KEEPA_BASE}/search", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+        asin_list = data.get("asinList") or []
+        if asin_list:
+            results = []
+            for asin in asin_list[:10]:
+                results.append({"asin": asin, "title": None, "image": None})
+            return results
+    except Exception:
+        pass
+
+    # 3. Fallback: DuckDuckGo Amazon search to find ASINs
+    return await _search_amazon_ddg(query)
+
+
+async def _search_amazon_ddg(query: str) -> list[dict]:
+    """Search DuckDuckGo for Amazon products and extract ASINs from URLs."""
+    import re as _r
+
+    asin_pat = _r.compile(r"/(?:dp|gp/product|ASIN)/([A-Z0-9]{10})")
+    seen: set[str] = set()
+    results: list[dict] = []
+
+    # Multiple strategies to find individual product pages (not search pages)
+    search_queries = [
+        f"amazon.com/dp {query}",              # targets product detail pages
+        f"site:amazon.com/dp/ {query}",        # site-scoped to /dp/ paths
+        f"amazon {query} best seller review",  # finds product reviews with links
+        f"amazon.com {query}",                 # broad fallback
+    ]
+
+    for sq in search_queries:
+        if len(results) >= 10:
+            break
+        ddg_results = await _web_search(sq, max_results=12)
+        for item in ddg_results:
+            url = item.get("url", "")
+
+            # Try to find ASIN in URL
+            m = asin_pat.search(url)
+            if m:
+                asin = m.group(1)
+                if asin not in seen:
+                    seen.add(asin)
+                    title = item.get("title", "")
+                    # Clean up Amazon suffixes from title
+                    for suffix in [" : Amazon.com", " - Amazon.com", " | Amazon.com",
+                                   " : Amazon", " - Amazon", "Amazon.com: ",
+                                   " - Amazon.com:", " | Amazon"]:
+                        title = title.replace(suffix, "")
+                    title = title.strip()
+                    results.append({
+                        "asin": asin,
+                        "title": title or None,
+                        "image": None,
+                    })
+            if len(results) >= 10:
+                break
+
     return results
+
+
+async def batch_evaluate_asins(asins: list[str], api_key: str) -> dict[str, dict]:
+    """Fetch Keepa data for multiple ASINs and compute quick TICK/CLIP/SKIP decisions.
+    Returns {asin: {title, image, current_price, decision, confidence}} for each ASIN."""
+    if not asins:
+        return {}
+
+    # Keepa supports comma-separated ASINs (up to 100)
+    asin_str = ",".join(asins)
+    params = {"key": api_key, "domain": 1, "asin": asin_str, "stats": 90}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(f"{KEEPA_BASE}/product", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return {}
+
+    products = data.get("products") or []
+    out: dict[str, dict] = {}
+
+    for product in products:
+        asin = product.get("asin", "")
+        if not asin:
+            continue
+
+        title = product.get("title", "Unknown Product")
+        image_url = ""
+        images = product.get("imagesCSV")
+        if images:
+            first = images.split(",")[0]
+            image_url = f"https://images-na.ssl-images-amazon.com/images/I/{first}"
+
+        stats = product.get("stats", {})
+
+        def _si(val):
+            if isinstance(val, list):
+                # Keepa [price, timestamp] — only use first element
+                return _si(val[0]) if val else None
+            if isinstance(val, (int, float)) and 0 < val < 5_000_000:
+                return int(val)
+            return None
+
+        def _ps(stat_list, *indices):
+            if not isinstance(stat_list, list):
+                return _si(stat_list)
+            for idx in indices:
+                if idx < len(stat_list):
+                    r = _si(stat_list[idx])
+                    if r is not None:
+                        return r
+            return None
+
+        current_raw = _ps(stats.get("current", []), 0, 1)
+        current_price = round(current_raw / 100, 2) if current_raw else None
+
+        hist_low_raw = _ps(stats.get("min", []), 0, 1)
+        hist_low = round(hist_low_raw / 100, 2) if hist_low_raw else None
+
+        avg_90d_raw = _ps(stats.get("avg90", []), 0, 1)
+        avg_90d = round(avg_90d_raw / 100, 2) if avg_90d_raw else None
+
+        # Quick decision
+        decision_result = compute_decision(current_price, hist_low, avg_90d, 0.0, "low")
+
+        out[asin] = {
+            "title": title,
+            "image": image_url,
+            "current_price": current_price,
+            "decision": decision_result["decision"],
+            "confidence": decision_result["confidence"],
+        }
+
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +924,7 @@ def compute_decision(
             f"Current price ${current_price:.2f} is near the 90-day average ${avg_90d:.2f} (within ±10%). Consider monitoring."
         )
 
-    # Volatility commentary
+    # Volatility — high volatility means the price is unreliable
     if volatility_score >= 0.15:
         explanation.append(
             f"High price volatility ({volatility_score:.2%}) — prices swing often. Waiting could pay off."
@@ -753,64 +932,90 @@ def compute_decision(
         if decision == "TICK":
             decision = "CLIP"
             confidence = max(confidence - 15, 40)
-            explanation.append("Downgraded from TICK to CLIP due to high volatility.")
+            explanation.append("Downgraded from TICK to CLIP — price is too volatile to recommend buying now.")
     elif low_vol:
         explanation.append(f"Low price volatility ({volatility_score:.2%}) — price is stable.")
 
-    # Seller risk
+    # Seller risk — no Amazon fulfillment = higher risk of scam/counterfeit
     if seller_risk == "high":
-        explanation.append("Seller risk is HIGH — no Amazon-direct fulfillment detected. Exercise caution.")
+        explanation.append("Seller risk is HIGH — no Amazon-direct fulfillment detected.")
         if decision == "TICK":
-            decision = "CLIP"
-            confidence = max(confidence - 10, 35)
-            explanation.append("Downgraded from TICK to CLIP due to seller risk.")
+            decision = "SKIP"
+            confidence = 72
+            explanation.append("Overridden from TICK to SKIP — high seller risk negates any price advantage.")
         elif decision == "CLIP":
             decision = "SKIP"
-            confidence = max(confidence - 5, 30)
-            explanation.append("Downgraded from CLIP to SKIP due to seller risk.")
+            confidence = max(confidence - 10, 30)
+            explanation.append("Downgraded from CLIP to SKIP due to high seller risk.")
     elif seller_risk == "medium":
         explanation.append("Seller risk is MEDIUM — Amazon may not be the direct seller.")
+        if decision == "TICK":
+            confidence = max(confidence - 10, 50)
+            explanation.append("Confidence reduced — verify the seller before purchasing.")
 
-    # Price manipulation
+    # Price manipulation — strongest override, applied last
     if manipulation and manipulation.get("risk_level") in ("medium", "high"):
-        manip_score = manipulation.get("score", 0)
         is_fake = manipulation.get("is_fake_deal", False)
         true_price = manipulation.get("true_market_price")
+        inflated_pct = manipulation.get("inflated_by_pct")
+        prev_decision = decision
 
         if is_fake:
-            explanation.append(
-                f"PRICE MANIPULATION DETECTED: This deal appears artificially inflated. "
-                f"True market price is ~${true_price:.2f}." if true_price else
-                "PRICE MANIPULATION DETECTED: This deal appears artificially inflated."
-            )
-            if decision == "TICK":
-                decision = "CLIP"
-                confidence = max(confidence - 20, 30)
-                explanation.append("Downgraded from TICK to CLIP due to suspected price manipulation.")
-            elif decision == "CLIP":
-                confidence = max(confidence - 10, 25)
-        elif manipulation["risk_level"] == "high":
-            explanation.append(
-                "High price manipulation risk detected — seller pricing patterns are suspicious."
-            )
-            if decision == "TICK":
-                decision = "CLIP"
-                confidence = max(confidence - 15, 35)
-                explanation.append("Downgraded from TICK to CLIP due to manipulation risk.")
-        else:
-            explanation.append("Moderate price manipulation signals detected — review the pricing history carefully.")
+            # Fake deal = always SKIP.  The "deal" is manufactured.
+            decision = "SKIP"
+            confidence = 90
+            if true_price:
+                explanation.append(
+                    f"PRICE MANIPULATION: This deal is fake — price was artificially inflated then \"discounted.\" "
+                    f"True market price is ~${true_price:.2f}. Do not buy at this price."
+                )
+            else:
+                explanation.append(
+                    "PRICE MANIPULATION: This deal is fake — price was artificially inflated then \"discounted.\" Do not buy."
+                )
+            if prev_decision != "SKIP":
+                explanation.append(f"Overridden from {prev_decision} to SKIP — manipulated pricing is never a good deal.")
 
-        if manipulation.get("inflated_by_pct") and manipulation["inflated_by_pct"] > 5:
+        elif manipulation["risk_level"] == "high":
+            # High manipulation risk = SKIP.  Pricing is untrustworthy.
+            decision = "SKIP"
+            confidence = 82
             explanation.append(
-                f"Current price may be inflated ~{manipulation['inflated_by_pct']:.0f}% above true market value (${true_price:.2f})." if true_price else
-                f"Current price may be inflated ~{manipulation['inflated_by_pct']:.0f}% above true market value."
+                "HIGH MANIPULATION RISK: Seller pricing patterns are suspicious — the price cannot be trusted."
             )
+            if prev_decision != "SKIP":
+                explanation.append(f"Overridden from {prev_decision} to SKIP — cannot recommend buying when pricing is manipulated.")
+
+        else:
+            # Medium manipulation = downgrade one level
+            if decision == "TICK":
+                decision = "CLIP"
+                confidence = max(confidence - 20, 40)
+                explanation.append(
+                    "MODERATE MANIPULATION: Suspicious pricing patterns detected. Downgraded from TICK to CLIP — monitor before buying."
+                )
+            else:
+                explanation.append(
+                    "MODERATE MANIPULATION: Suspicious pricing patterns detected — review the price history carefully before buying."
+                )
+                confidence = max(confidence - 10, 30)
+
+        # Always note inflated amount when significant
+        if inflated_pct and inflated_pct > 5:
+            if true_price:
+                explanation.append(
+                    f"Current price is ~{inflated_pct:.0f}% above true market value (${true_price:.2f})."
+                )
+            else:
+                explanation.append(
+                    f"Current price is ~{inflated_pct:.0f}% above true market value."
+                )
 
     return {"decision": decision, "confidence": confidence, "explanation": explanation}
 
 
 # ---------------------------------------------------------------------------
-# DuckDuckGo web search (HTML scraping — no API key needed)
+# Web search — Serper.dev (primary) + duckduckgo-search package (fallback)
 # ---------------------------------------------------------------------------
 
 import re as _re
@@ -818,37 +1023,76 @@ from urllib.parse import urlparse as _urlparse
 import asyncio
 
 
-_DDG_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
-
-async def _ddg_search(query: str, max_results: int = 8) -> list[dict]:
-    """Scrape DuckDuckGo HTML search results."""
-    results: list[dict] = []
+async def _serper_search(query: str, max_results: int = 8) -> list[dict]:
+    """Search via Serper.dev Google Search API."""
+    api_key = os.getenv("SERPER_API_KEY")
+    if not api_key:
+        return []
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-            resp = await client.get(
-                "https://html.duckduckgo.com/html/",
-                params={"q": query},
-                headers=_DDG_HEADERS,
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+                json={"q": query, "num": max_results},
             )
             resp.raise_for_status()
-            html = resp.text
-
-        links = _re.findall(r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>', html)
-        snippets = _re.findall(r'<a class="result__snippet"[^>]*>(.*?)</a>', html, _re.DOTALL)
-
-        for idx, (url, raw_title) in enumerate(links[:max_results]):
-            title = _re.sub(r"<[^>]+>", "", raw_title).strip()
-            snippet = ""
-            if idx < len(snippets):
-                snippet = _re.sub(r"<[^>]+>", "", snippets[idx]).strip()
+            data = resp.json()
+        results: list[dict] = []
+        for item in data.get("organic", [])[:max_results]:
+            url = item.get("link", "")
             source = _urlparse(url).netloc.replace("www.", "")
-            results.append({"title": title, "url": url, "snippet": snippet, "source": source})
+            if not source:
+                continue
+            results.append({
+                "title": item.get("title", ""),
+                "url": url,
+                "snippet": item.get("snippet", ""),
+                "source": source,
+            })
+        return results
     except Exception:
-        pass
-    return results
+        return []
+
+
+async def _ddgs_search(query: str, max_results: int = 8) -> list[dict]:
+    """Fallback: search via duckduckgo-search Python package (sync, run in thread)."""
+    try:
+        import warnings
+        warnings.filterwarnings("ignore", message=".*renamed.*")
+        from duckduckgo_search import DDGS
+    except ImportError:
+        return []
+    try:
+        loop = asyncio.get_event_loop()
+        raw = await loop.run_in_executor(
+            None, lambda: DDGS().text(query, max_results=max_results)
+        )
+        results: list[dict] = []
+        for item in (raw or [])[:max_results]:
+            url = item.get("href", "")
+            source = _urlparse(url).netloc.replace("www.", "")
+            if not source:
+                continue
+            results.append({
+                "title": item.get("title", ""),
+                "url": url,
+                "snippet": item.get("body", ""),
+                "source": source,
+            })
+        return results
+    except Exception:
+        return []
+
+
+async def _web_search(query: str, max_results: int = 8) -> list[dict]:
+    """
+    Unified web search: tries Serper.dev first, falls back to duckduckgo-search.
+    Returns [{title, url, snippet, source}].
+    """
+    results = await _serper_search(query, max_results)
+    if results:
+        return results
+    return await _ddgs_search(query, max_results)
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +1152,7 @@ def _enrich_result(item: dict, category: str) -> dict:
 async def _search_source(query_template: str, product: str, category: str, max_results: int = 3) -> list[dict]:
     """Run a single site-scoped search and tag results."""
     query = query_template.format(product=product)
-    results = await _ddg_search(query, max_results)
+    results = await _web_search(query, max_results)
     return [_enrich_result(r, category) for r in results]
 
 
@@ -952,7 +1196,7 @@ async def fetch_alternatives(product_title: str) -> list[dict]:
         f"{product_title} best alternative 2025",
         f"{product_title} vs competitor comparison",
     ]
-    tasks = [_ddg_search(q, 4) for q in queries]
+    tasks = [_web_search(q, 4) for q in queries]
     groups = await asyncio.gather(*tasks, return_exceptions=True)
     combined: list[dict] = []
     seen_urls: set[str] = set()
@@ -972,7 +1216,7 @@ async def fetch_diy_articles(product_title: str) -> list[dict]:
         f"{product_title} fix yourself instead of buying",
         f"{product_title} substitute homemade",
     ]
-    tasks = [_ddg_search(q, 3) for q in queries]
+    tasks = [_web_search(q, 3) for q in queries]
     groups = await asyncio.gather(*tasks, return_exceptions=True)
     combined: list[dict] = []
     seen_urls: set[str] = set()
@@ -1082,7 +1326,7 @@ async def fetch_reviews(product_title: str) -> dict:
       }
     """
     tasks = [
-        _ddg_search(tpl.format(product=product_title), 4)
+        _web_search(tpl.format(product=product_title), 4)
         for tpl, _ in _REVIEW_QUERIES
     ]
     groups = await asyncio.gather(*tasks, return_exceptions=True)

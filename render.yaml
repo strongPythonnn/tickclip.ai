@@ -15,3 +15,5 @@ services:
         sync: false
       - key: AMAZON_REGION
         sync: false
+      - key: SERPER_API_KEY
+        sync: false

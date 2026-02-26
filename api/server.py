@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.utils import (
+    batch_evaluate_asins,
     compute_decision,
     enrich_from_amazon,
     fetch_alternatives,
@@ -65,7 +66,7 @@ def _extract_asin(text: str) -> str | None:
 
 @app.get("/api/search")
 async def search(q: str = Query(..., min_length=1)):
-    """Search for products by keyword.  Returns list of ASINs."""
+    """Search for products by keyword.  Returns list of ASINs with TICK/CLIP/SKIP decisions."""
     keepa_key = os.getenv("KEEPA_API_KEY")
     if not keepa_key:
         raise HTTPException(503, "Keepa API key is not configured.")
@@ -73,17 +74,44 @@ async def search(q: str = Query(..., min_length=1)):
     # If the query looks like an ASIN or Amazon URL, short-circuit
     asin = _extract_asin(q)
     if asin:
-        return {"results": [{"asin": asin, "title": None, "image": None}]}
+        # Evaluate single ASIN immediately
+        evals = await batch_evaluate_asins([asin], keepa_key)
+        info = evals.get(asin, {})
+        return {"results": [{
+            "asin": asin,
+            "title": info.get("title"),
+            "image": info.get("image"),
+            "current_price": info.get("current_price"),
+            "decision": info.get("decision", "CLIP"),
+            "confidence": info.get("confidence", 0),
+        }]}
 
     try:
         results = await search_keepa(q, keepa_key)
-    except Exception as exc:
-        raise HTTPException(502, f"Keepa search failed: {exc}")
+    except Exception:
+        results = []
 
     if not results:
-        raise HTTPException(404, "No products found.")
+        return {"results": []}
 
-    return {"results": results}
+    # Batch evaluate all found ASINs to get TICK/CLIP/SKIP
+    asins = [r["asin"] for r in results]
+    evals = await batch_evaluate_asins(asins, keepa_key)
+
+    # Merge evaluation data into results
+    enriched = []
+    for r in results:
+        info = evals.get(r["asin"], {})
+        enriched.append({
+            "asin": r["asin"],
+            "title": info.get("title") or r.get("title"),
+            "image": info.get("image") or r.get("image"),
+            "current_price": info.get("current_price"),
+            "decision": info.get("decision", "CLIP"),
+            "confidence": info.get("confidence", 0),
+        })
+
+    return {"results": enriched}
 
 
 @app.get("/api/evaluate")
