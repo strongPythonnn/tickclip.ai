@@ -553,3 +553,169 @@ async def fetch_diy_articles(product_title: str) -> list[dict]:
                     seen_urls.add(item["url"])
                     combined.append(_enrich_result(item, "diy"))
     return combined[:8]
+
+
+# ---------------------------------------------------------------------------
+# Review analysis — scrape expert & community reviews, compute sentiment
+# ---------------------------------------------------------------------------
+
+# Trusted review sources with site-scoped searches
+_REVIEW_QUERIES = [
+    ("site:reddit.com {product} review worth it", "reddit"),
+    ("site:youtube.com {product} review", "youtube"),
+    ("{product} review wirecutter OR rtings OR tomsguide OR consumerreports", "expert"),
+    ("{product} review problems complaints", "critical"),
+]
+
+# Sentiment keyword dictionaries
+_POSITIVE_WORDS = {
+    "excellent", "amazing", "perfect", "love", "great", "best", "fantastic",
+    "awesome", "solid", "reliable", "recommend", "worth", "impressed",
+    "quality", "premium", "durable", "comfortable", "fast", "smooth",
+    "beautiful", "outstanding", "superb", "flawless", "incredible",
+    "favorite", "happy", "pleased", "satisfied", "good", "nice",
+    "well-built", "sturdy", "upgrade", "improved", "bargain", "value",
+}
+_NEGATIVE_WORDS = {
+    "terrible", "awful", "worst", "hate", "bad", "cheap", "broken",
+    "defective", "flimsy", "disappointing", "waste", "overpriced",
+    "avoid", "return", "refund", "poor", "fails", "died", "stopped",
+    "unreliable", "junk", "garbage", "useless", "regret", "problem",
+    "issue", "complaint", "fragile", "slow", "loud", "uncomfortable",
+    "malfunction", "scam", "ripoff", "horrible", "sucks", "worse",
+}
+
+# Review source metadata
+_REVIEW_SOURCE_META = {
+    "reddit.com": {"name": "Reddit", "color": "#ff4500", "icon": "community"},
+    "youtube.com": {"name": "YouTube", "color": "#ff0000", "icon": "video"},
+    "wirecutter.com": {"name": "Wirecutter", "color": "#0a6abf", "icon": "expert"},
+    "rtings.com": {"name": "RTINGS", "color": "#1a73e8", "icon": "expert"},
+    "tomsguide.com": {"name": "Tom's Guide", "color": "#e4002b", "icon": "expert"},
+    "consumerreports.org": {"name": "Consumer Reports", "color": "#007749", "icon": "expert"},
+    "techradar.com": {"name": "TechRadar", "color": "#0080ff", "icon": "expert"},
+    "cnet.com": {"name": "CNET", "color": "#d41e1e", "icon": "expert"},
+    "verge.com": {"name": "The Verge", "color": "#e5127d", "icon": "expert"},
+    "pcmag.com": {"name": "PCMag", "color": "#ed1c24", "icon": "expert"},
+}
+
+
+def _analyze_sentiment(text: str) -> dict:
+    """Keyword-based sentiment scoring for a snippet of text."""
+    words = set(_re.findall(r"[a-z]+", text.lower()))
+    pos = len(words & _POSITIVE_WORDS)
+    neg = len(words & _NEGATIVE_WORDS)
+    total = pos + neg
+    if total == 0:
+        return {"score": 0.5, "label": "neutral", "positive": 0, "negative": 0}
+    score = round(pos / total, 2)
+    if score >= 0.65:
+        label = "positive"
+    elif score <= 0.35:
+        label = "negative"
+    else:
+        label = "mixed"
+    return {"score": score, "label": label, "positive": pos, "negative": neg}
+
+
+def _tag_review(item: dict, query_type: str) -> dict:
+    """Add review-specific metadata to a search result."""
+    domain = item.get("source", "")
+    meta = None
+    for key, val in _REVIEW_SOURCE_META.items():
+        if key in domain:
+            meta = val
+            break
+    item["review_source"] = meta["name"] if meta else domain.split(".")[0].title()
+    item["review_color"] = meta["color"] if meta else "#6b7280"
+    item["review_type"] = meta["icon"] if meta else "general"
+    item["query_type"] = query_type  # "reddit", "youtube", "expert", "critical"
+
+    # Sentiment on the snippet
+    snippet = item.get("snippet", "") + " " + item.get("title", "")
+    item["sentiment"] = _analyze_sentiment(snippet)
+    return item
+
+
+async def fetch_reviews(product_title: str) -> dict:
+    """
+    Fetch reviews from Reddit, YouTube, expert sites, and critical reviews.
+    Returns:
+      {
+        reviews: [{title, url, snippet, source, review_source, review_color,
+                   review_type, query_type, sentiment}],
+        summary: {
+          total, positive_count, negative_count, mixed_count,
+          overall_score, overall_label,
+          top_pros[], top_cons[], verdict
+        }
+      }
+    """
+    tasks = [
+        _ddg_search(tpl.format(product=product_title), 4)
+        for tpl, _ in _REVIEW_QUERIES
+    ]
+    groups = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_reviews: list[dict] = []
+    seen: set[str] = set()
+    for idx, group in enumerate(groups):
+        if not isinstance(group, list):
+            continue
+        query_type = _REVIEW_QUERIES[idx][1]
+        for item in group:
+            if item["url"] not in seen:
+                seen.add(item["url"])
+                all_reviews.append(_tag_review(item, query_type))
+
+    # Aggregate sentiment
+    sentiments = [r["sentiment"] for r in all_reviews if r.get("sentiment")]
+    pos_count = sum(1 for s in sentiments if s["label"] == "positive")
+    neg_count = sum(1 for s in sentiments if s["label"] == "negative")
+    mix_count = sum(1 for s in sentiments if s["label"] == "mixed")
+    neutral_count = sum(1 for s in sentiments if s["label"] == "neutral")
+    total = len(sentiments)
+
+    if total > 0:
+        avg_score = round(sum(s["score"] for s in sentiments) / total, 2)
+    else:
+        avg_score = 0.5
+
+    if avg_score >= 0.65:
+        overall_label = "Mostly Positive"
+    elif avg_score >= 0.45:
+        overall_label = "Mixed"
+    else:
+        overall_label = "Mostly Negative"
+
+    # Extract pros and cons from snippets
+    all_text = " ".join(r.get("snippet", "") + " " + r.get("title", "") for r in all_reviews).lower()
+    all_words = set(_re.findall(r"[a-z]+", all_text))
+    found_pros = sorted(all_words & _POSITIVE_WORDS)[:5]
+    found_cons = sorted(all_words & _NEGATIVE_WORDS)[:5]
+
+    # Verdict
+    if avg_score >= 0.7 and neg_count <= 1:
+        verdict = "Reviewers overwhelmingly recommend this product."
+    elif avg_score >= 0.55:
+        verdict = "Reviews are generally positive with some concerns."
+    elif avg_score >= 0.4:
+        verdict = "Reviews are mixed — do more research before buying."
+    else:
+        verdict = "Reviews lean negative — consider alternatives."
+
+    return {
+        "reviews": all_reviews[:12],
+        "summary": {
+            "total": total,
+            "positive_count": pos_count,
+            "negative_count": neg_count,
+            "mixed_count": mix_count,
+            "neutral_count": neutral_count,
+            "overall_score": avg_score,
+            "overall_label": overall_label,
+            "top_pros": found_pros,
+            "top_cons": found_cons,
+            "verdict": verdict,
+        },
+    }

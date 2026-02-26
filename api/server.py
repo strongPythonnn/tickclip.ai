@@ -20,6 +20,7 @@ from api.utils import (
     fetch_diy_articles,
     fetch_keepa,
     fetch_retailer_prices,
+    fetch_reviews,
     search_keepa,
 )
 
@@ -117,25 +118,31 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         keepa["seller_risk"],
     )
 
-    # 4. Always fetch cross-retailer prices & deals
+    # 4. Fetch everything in parallel
     import asyncio
 
-    retailer_task = fetch_retailer_prices(keepa["title"])
-    deals_task = fetch_deals(keepa["title"])
-
-    # 5. Alternatives + DIY if CLIP or SKIP
-    async def _empty() -> list:
+    async def _empty_list() -> list:
         return []
 
-    is_clip_skip = decision_result["decision"] in ("CLIP", "SKIP")
-    alt_task = fetch_alternatives(keepa["title"]) if is_clip_skip else _empty()
-    diy_task = fetch_diy_articles(keepa["title"]) if is_clip_skip else _empty()
+    async def _empty_dict() -> dict:
+        return {"reviews": [], "summary": {}}
 
-    results = await asyncio.gather(retailer_task, deals_task, alt_task, diy_task, return_exceptions=True)
+    is_clip_skip = decision_result["decision"] in ("CLIP", "SKIP")
+
+    results = await asyncio.gather(
+        fetch_retailer_prices(keepa["title"]),
+        fetch_deals(keepa["title"]),
+        fetch_reviews(keepa["title"]),
+        fetch_alternatives(keepa["title"]) if is_clip_skip else _empty_list(),
+        fetch_diy_articles(keepa["title"]) if is_clip_skip else _empty_list(),
+        return_exceptions=True,
+    )
+
     retailer_prices = results[0] if isinstance(results[0], list) else []
     deals = results[1] if isinstance(results[1], list) else []
-    alternatives = results[2] if isinstance(results[2], list) else []
-    diy_articles = results[3] if isinstance(results[3], list) else []
+    review_data = results[2] if isinstance(results[2], dict) else {"reviews": [], "summary": {}}
+    alternatives = results[3] if isinstance(results[3], list) else []
+    diy_articles = results[4] if isinstance(results[4], list) else []
 
     return {
         "asin": asin,
@@ -153,6 +160,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         "price_series": keepa["price_series"],
         "retailer_prices": retailer_prices,
         "deals": deals,
+        "review_analysis": review_data,
         "alternatives": alternatives,
         "diy_articles": diy_articles,
     }
