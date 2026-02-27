@@ -2,6 +2,7 @@
 TickClip.ai — FastAPI backend serving fiduciary product evaluations.
 """
 
+import asyncio
 import os
 import re
 from pathlib import Path
@@ -124,20 +125,21 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
     if not keepa_key:
         raise HTTPException(503, "Keepa API key is not configured.")
 
-    # 1. Keepa data
-    try:
-        keepa = await fetch_keepa(asin, keepa_key)
-    except Exception as exc:
-        raise HTTPException(502, f"Keepa request failed: {exc}")
+    # 1. Keepa + Amazon PA-API in parallel (both only need ASIN)
+    keepa_task = fetch_keepa(asin, keepa_key)
+    amazon_task = enrich_from_amazon(asin)
+    keepa_result, amazon = await asyncio.gather(keepa_task, amazon_task, return_exceptions=True)
 
-    # 2. Optional Amazon PA-API enrichment
-    amazon = await enrich_from_amazon(asin)
+    if isinstance(keepa_result, Exception):
+        raise HTTPException(502, f"Keepa request failed: {keepa_result}")
+    keepa = keepa_result
+
     amazon_offers: list[dict] = []
     amazon_promotions: list[dict] = []
     amazon_offer_summaries: list[dict] = []
     amazon_features: list[str] = []
     brand = None
-    if amazon:
+    if isinstance(amazon, dict) and amazon:
         if amazon.get("title"):
             keepa["title"] = amazon["title"]
         if amazon.get("image"):
@@ -148,7 +150,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         amazon_features = amazon.get("features", [])
         brand = amazon.get("brand") or amazon.get("manufacturer")
 
-    # 3. Decision engine (includes manipulation analysis)
+    # 2. Decision engine (instant, no I/O)
     decision_result = compute_decision(
         keepa["current_price"],
         keepa["hist_low"],
@@ -158,9 +160,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         keepa.get("price_manipulation"),
     )
 
-    # 4. Fetch everything in parallel — always fetch all sections
-    import asyncio
-
+    # 3. All web searches in parallel (19 Serper calls)
     results = await asyncio.gather(
         fetch_retailer_prices(keepa["title"], keepa["current_price"]),
         fetch_deals(keepa["title"]),

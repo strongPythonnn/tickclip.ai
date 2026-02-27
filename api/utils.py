@@ -1023,20 +1023,31 @@ from urllib.parse import urlparse as _urlparse
 import asyncio
 
 
+_serper_client: httpx.AsyncClient | None = None
+
+
+def _get_serper_client() -> httpx.AsyncClient:
+    """Reuse a single httpx client for all Serper calls (connection pooling)."""
+    global _serper_client
+    if _serper_client is None or _serper_client.is_closed:
+        _serper_client = httpx.AsyncClient(timeout=10)
+    return _serper_client
+
+
 async def _serper_search(query: str, max_results: int = 8) -> list[dict]:
     """Search via Serper.dev Google Search API."""
     api_key = os.getenv("SERPER_API_KEY")
     if not api_key:
         return []
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                "https://google.serper.dev/search",
-                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-                json={"q": query, "num": max_results},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        client = _get_serper_client()
+        resp = await client.post(
+            "https://google.serper.dev/search",
+            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            json={"q": query, "num": max_results},
+        )
+        resp.raise_for_status()
+        data = resp.json()
         results: list[dict] = []
         for item in data.get("organic", [])[:max_results]:
             url = item.get("link", "")
