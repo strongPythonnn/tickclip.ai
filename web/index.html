@@ -370,6 +370,79 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .amz-deal-prices { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
 
+/* ── Chat bubble ── */
+.chat-fab {
+  position: fixed; bottom: 24px; right: 24px; z-index: 1000;
+  width: 56px; height: 56px; border-radius: 50%; border: none;
+  background: #1a1a1a; color: #fff; font-size: 1.4rem;
+  cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.2);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s;
+}
+.chat-fab:hover { transform: scale(1.08); }
+.chat-panel {
+  position: fixed; bottom: 90px; right: 24px; z-index: 1000;
+  width: 400px; max-height: 520px; border-radius: 16px;
+  background: #fff; border: 1px solid #e5e7eb;
+  box-shadow: 0 8px 32px rgba(0,0,0,.12);
+  display: none; flex-direction: column; overflow: hidden;
+}
+.chat-panel.open { display: flex; }
+.chat-header {
+  padding: 14px 18px; background: #1a1a1a; color: #fff;
+  font-size: .88rem; font-weight: 700; display: flex; align-items: center; gap: 8px;
+}
+.chat-header .ch-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; }
+.chat-messages {
+  flex: 1; overflow-y: auto; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  min-height: 300px; max-height: 380px;
+}
+.chat-msg {
+  max-width: 85%; padding: 10px 14px; border-radius: 12px;
+  font-size: .82rem; line-height: 1.5; word-wrap: break-word;
+}
+.chat-msg.user {
+  align-self: flex-end; background: #1a1a1a; color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.chat-msg.agent {
+  align-self: flex-start; background: #f3f4f6; color: #1a1a1a;
+  border-bottom-left-radius: 4px;
+}
+.chat-msg.agent p { margin: 4px 0; }
+.chat-msg.agent strong { font-weight: 700; }
+.chat-msg.agent ul, .chat-msg.agent ol { margin: 4px 0; padding-left: 18px; }
+.chat-tools {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+.chat-tool-badge {
+  font-size: .58rem; padding: 1px 6px; border-radius: 4px;
+  background: #dbeafe; color: #1e40af; font-weight: 600;
+  text-transform: uppercase;
+}
+.chat-typing {
+  align-self: flex-start; padding: 10px 14px; border-radius: 12px;
+  background: #f3f4f6; font-size: .82rem; color: #9ca3af;
+}
+.chat-input-row {
+  display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid #e5e7eb;
+}
+.chat-input-row input {
+  flex: 1; padding: 10px 14px; font-size: .84rem;
+  border: 1px solid #d1d5db; border-radius: 10px; outline: none;
+}
+.chat-input-row input:focus { border-color: #2563eb; }
+.chat-input-row button {
+  padding: 10px 16px; font-size: .82rem; font-weight: 600;
+  background: #1a1a1a; color: #fff; border: none; border-radius: 10px;
+  cursor: pointer; white-space: nowrap;
+}
+.chat-input-row button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 500px) {
+  .chat-panel { width: calc(100vw - 32px); right: 16px; bottom: 80px; }
+}
+
 /* ── Promise ── */
 .promise {
   margin: 28px auto; max-width: 540px; text-align: center;
@@ -914,6 +987,123 @@ function buildChart(series, color) {
 
 function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function fmt(v){return v!=null?Number(v).toFixed(2):'—';}
+</script>
+
+<!-- ── Chat Agent ── -->
+<button class="chat-fab" id="chat-fab" onclick="toggleChat()" title="Ask the AI advisor">&#128172;</button>
+<div class="chat-panel" id="chat-panel">
+  <div class="chat-header">
+    <span class="ch-dot"></span>
+    TickClip AI Advisor
+  </div>
+  <div class="chat-messages" id="chat-messages">
+    <div class="chat-msg agent">Hi! I'm your fiduciary shopping advisor. Ask me anything about a product — I'll research real data before answering. Try: "Should I buy the Sony WH-1000XM5?"</div>
+  </div>
+  <div class="chat-input-row">
+    <input id="chat-input" type="text" placeholder="Ask about any product..." onkeydown="if(event.key==='Enter')sendChat()" />
+    <button id="chat-send" onclick="sendChat()">Send</button>
+  </div>
+</div>
+
+<script>
+// ── Chat state ──
+let chatOpen = false;
+let chatHistory = [];
+let currentAsin = null;
+
+// Track current ASIN when evaluating
+const origDoEvaluate = doEvaluate;
+doEvaluate = function(asin) { currentAsin = asin; return origDoEvaluate(asin); };
+const origGoBack = goBack;
+goBack = function() { currentAsin = null; return origGoBack(); };
+
+function toggleChat() {
+  chatOpen = !chatOpen;
+  document.getElementById('chat-panel').classList.toggle('open', chatOpen);
+  if (chatOpen) document.getElementById('chat-input').focus();
+}
+
+function addChatMsg(role, text, toolsUsed) {
+  const el = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = `chat-msg ${role}`;
+
+  if (role === 'agent') {
+    // Simple markdown: **bold**, bullet lists, newlines
+    let html = esc(text)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n- /g, '\n<li>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+    html = '<p>' + html + '</p>';
+    div.innerHTML = html;
+
+    if (toolsUsed && toolsUsed.length) {
+      const tb = document.createElement('div');
+      tb.className = 'chat-tools';
+      toolsUsed.forEach(t => {
+        const b = document.createElement('span');
+        b.className = 'chat-tool-badge';
+        b.textContent = t.replace(/_/g, ' ');
+        tb.appendChild(b);
+      });
+      div.appendChild(tb);
+    }
+  } else {
+    div.textContent = text;
+  }
+
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const btn = document.getElementById('chat-send');
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  btn.disabled = true;
+  addChatMsg('user', msg);
+  chatHistory.push({role: 'user', content: msg});
+
+  // Show typing indicator
+  const el = document.getElementById('chat-messages');
+  const typing = document.createElement('div');
+  typing.className = 'chat-typing';
+  typing.innerHTML = '<span class="loader"></span> Researching...';
+  typing.id = 'chat-typing';
+  el.appendChild(typing);
+  el.scrollTop = el.scrollHeight;
+
+  try {
+    const resp = await fetch(`${API}/api/chat`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: msg,
+        asin: currentAsin,
+        history: chatHistory.slice(-10),
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Chat failed');
+
+    // Remove typing indicator
+    const t = document.getElementById('chat-typing');
+    if (t) t.remove();
+
+    addChatMsg('agent', data.reply, data.tools_used);
+    chatHistory.push({role: 'assistant', content: data.reply});
+  } catch (e) {
+    const t = document.getElementById('chat-typing');
+    if (t) t.remove();
+    addChatMsg('agent', 'Sorry, I encountered an error: ' + e.message);
+  }
+  btn.disabled = false;
+  input.focus();
+}
 </script>
 </body>
 </html>

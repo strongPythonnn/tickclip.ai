@@ -35,7 +35,7 @@ app = FastAPI(title="TickClip.ai", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -212,6 +212,40 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         "alternatives": alternatives,
         "diy_articles": diy_articles,
     }
+
+
+# ---------------------------------------------------------------------------
+# AI Chat Agent
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel
+
+
+class ChatRequest(BaseModel):
+    message: str
+    asin: str | None = None
+    history: list[dict] | None = None
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    """Fiduciary AI chat — tool-augmented, unbiased shopping advisor."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(503, "AI agent is not configured (missing ANTHROPIC_API_KEY).")
+
+    from api.agent import FiduciaryAgent
+
+    try:
+        agent = FiduciaryAgent()
+        result = await agent.chat(
+            message=req.message,
+            asin=req.asin,
+            history=req.history,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Agent error: {e}")
 
 
 # ---------------------------------------------------------------------------
