@@ -66,6 +66,26 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
 .sr-price { font-size: .8rem; font-weight: 700; color: #1a1a1a; }
 .sr-conf { font-size: .68rem; color: #9ca3af; }
 
+/* ── Decision explainer ── */
+.decision-explainer { display: flex; flex-direction: column; gap: 10px; margin: 20px 0 24px; }
+.de-item {
+  display: flex; align-items: flex-start; gap: 14px; padding: 14px 16px;
+  border-radius: 10px; border: 1px solid #e5e7eb; background: #fff;
+}
+.de-icon {
+  width: 36px; height: 36px; border-radius: 50%; display: flex;
+  align-items: center; justify-content: center; flex-shrink: 0;
+  font-size: 1.1rem; font-weight: 800; color: #fff;
+}
+.de-item.tick .de-icon { background: #10b981; }
+.de-item.clip .de-icon { background: #f59e0b; }
+.de-item.skip .de-icon { background: #ef4444; }
+.de-body h4 { font-size: .82rem; font-weight: 700; margin-bottom: 2px; }
+.de-item.tick h4 { color: #065f46; }
+.de-item.clip h4 { color: #92400e; }
+.de-item.skip h4 { color: #991b1b; }
+.de-body p { font-size: .76rem; color: #6b7280; line-height: 1.45; }
+
 /* ── Loading / messages ── */
 .msg { text-align: center; padding: 24px; color: #6b7280; font-size: .95rem; }
 .msg.error { color: #ef4444; }
@@ -380,6 +400,29 @@ footer { text-align: center; padding: 24px 0; color: #9ca3af; font-size: .75rem;
     <div class="search-wrap">
       <input id="search-input" type="text" placeholder="Search product or paste Amazon ASIN / URL..." />
       <button id="search-btn" onclick="doSearch()">Evaluate</button>
+    </div>
+    <div class="decision-explainer">
+      <div class="de-item tick">
+        <div class="de-icon">&#10003;</div>
+        <div class="de-body">
+          <h4>TICK — Buy Now</h4>
+          <p>Price is at or near its historic low. No manipulation detected. You're getting a fair deal — go for it.</p>
+        </div>
+      </div>
+      <div class="de-item clip">
+        <div class="de-icon">&#9202;</div>
+        <div class="de-body">
+          <h4>CLIP — Wait</h4>
+          <p>Price is above average or volatile. Save it and check back — a better deal is likely coming.</p>
+        </div>
+      </div>
+      <div class="de-item skip">
+        <div class="de-icon">&#10007;</div>
+        <div class="de-body">
+          <h4>SKIP — Don't Buy</h4>
+          <p>Price is inflated, manipulated, or far above fair value. Walk away — this is not a good deal.</p>
+        </div>
+      </div>
     </div>
     <div id="search-results" class="search-results"></div>
     <div id="search-msg" class="msg"></div>
