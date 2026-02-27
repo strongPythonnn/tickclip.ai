@@ -23,6 +23,10 @@ class MarketConfig:
     currency_symbol: str
     serper_gl: str
     camel_base: str
+    # Per-market Amazon PA-API credential env var names
+    env_access_key: str = "AMAZON_ACCESS_KEY"
+    env_secret_key: str = "AMAZON_SECRET_KEY"
+    env_partner_tag: str = "AMAZON_PARTNER_TAG"
     retailer_queries: dict = field(default_factory=dict)
     retailer_meta: dict = field(default_factory=dict)
     deal_queries: dict = field(default_factory=dict)
@@ -84,6 +88,9 @@ _MARKETS: dict[str, MarketConfig] = {
         currency_symbol="\u00a3",
         serper_gl="uk",
         camel_base="uk.camelcamelcamel.com",
+        env_access_key="AMAZON_ACCESS_KEY_UK",
+        env_secret_key="AMAZON_SECRET_KEY_UK",
+        env_partner_tag="AMAZON_PARTNER_TAG_UK",
         retailer_queries={
             "argos": "site:argos.co.uk {product}",
             "currys": "site:currys.co.uk {product}",

@@ -185,9 +185,9 @@ async def search_amazon_products(query: str, market: MarketConfig | None = None)
     Returns list of {asin, title, image}."""
     if market is None:
         market = get_market()
-    if not _pa_api_available():
+    if not _pa_api_available(market):
         return []
-    partner_tag = os.environ["AMAZON_PARTNER_TAG"]
+    partner_tag = os.environ[market.env_partner_tag]
     host = market.amazon_host
     payload = {
         "Keywords": query,
@@ -389,16 +389,18 @@ async def batch_evaluate_asins(asins: list[str], api_key: str, market: MarketCon
 # Amazon PA-API (optional)
 # ---------------------------------------------------------------------------
 
-def _pa_api_available() -> bool:
-    return all(os.getenv(k) for k in ("AMAZON_ACCESS_KEY", "AMAZON_SECRET_KEY", "AMAZON_PARTNER_TAG"))
+def _pa_api_available(market: MarketConfig | None = None) -> bool:
+    if market is None:
+        market = get_market()
+    return all(os.getenv(k) for k in (market.env_access_key, market.env_secret_key, market.env_partner_tag))
 
 
 def _sign_pa_request(payload_bytes: bytes, target: str, market: MarketConfig | None = None) -> dict[str, str]:
     """AWS Signature V4 for PA-API."""
     if market is None:
         market = get_market()
-    access = os.environ["AMAZON_ACCESS_KEY"]
-    secret = os.environ["AMAZON_SECRET_KEY"]
+    access = os.environ[market.env_access_key]
+    secret = os.environ[market.env_secret_key]
     region = os.getenv("AMAZON_REGION", market.amazon_region)
     host = market.amazon_host
     service = "ProductAdvertisingAPI"
@@ -453,9 +455,9 @@ async def enrich_from_amazon(asin: str, market: MarketConfig | None = None) -> d
     """
     if market is None:
         market = get_market()
-    if not _pa_api_available():
+    if not _pa_api_available(market):
         return None
-    partner_tag = os.environ["AMAZON_PARTNER_TAG"]
+    partner_tag = os.environ[market.env_partner_tag]
     host = market.amazon_host
     payload = {
         "ItemIds": [asin],
@@ -592,9 +594,9 @@ async def search_amazon_deals(query: str, market: MarketConfig | None = None) ->
     """Search Amazon PA-API for deals on similar products."""
     if market is None:
         market = get_market()
-    if not _pa_api_available():
+    if not _pa_api_available(market):
         return []
-    partner_tag = os.environ["AMAZON_PARTNER_TAG"]
+    partner_tag = os.environ[market.env_partner_tag]
     host = market.amazon_host
     payload = {
         "Keywords": query,
