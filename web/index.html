@@ -57,6 +57,8 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
 .sr-badge.TICK { background: #10b981; }
 .sr-badge.CLIP { background: #f59e0b; }
 .sr-badge.SKIP { background: #ef4444; }
+.sr-thumb { width: 44px; height: 44px; object-fit: contain; border-radius: 6px;
+  background: #f9fafb; border: 1px solid #e5e7eb; flex-shrink: 0; }
 .sr-info { flex: 1; min-width: 0; }
 .sr-title { font-weight: 600; font-size: .88rem; line-height: 1.3;
   display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
@@ -429,6 +431,7 @@ async function doSearch() {
       const price = i.current_price != null ? `$${Number(i.current_price).toFixed(2)}` : '';
       const conf = i.confidence ? `${i.confidence}% confidence` : '';
       b.innerHTML = `<span class="sr-badge ${dec}">${dec}</span>`
+        + `${i.image?`<img class="sr-thumb" src="${i.image}" alt=""/>`:''}`
         + `<div class="sr-info"><div class="sr-title">${esc(i.title||'Product')}</div>`
         + `<div class="sr-meta">${price?`<span class="sr-price">${price}</span>`:''}`
         + `${conf?`<span class="sr-conf">${conf}</span>`:''}</div></div>`
