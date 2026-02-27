@@ -110,9 +110,11 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
   font-size: 1.4rem; font-weight: 800; letter-spacing: 1px;
   padding: 8px 24px; border-radius: 10px; color: #fff;
 }
+.badge .badge-icon { margin-right: 4px; }
 .badge.TICK { background: #10b981; }
 .badge.CLIP { background: #f59e0b; }
 .badge.SKIP { background: #ef4444; }
+.badge-meaning { font-size: .88rem; font-weight: 700; color: #6b7280; white-space: nowrap; }
 .conf-bar { flex: 1; min-width: 120px; }
 .conf-bar .cl { font-size: .75rem; color: #6b7280; margin-bottom: 3px; }
 .conf-bar .ct { height: 7px; background: #f3f4f6; border-radius: 4px; overflow: hidden; }
@@ -516,9 +518,12 @@ function render(d) {
   h += `<div class="main-col">`;
   h += `<div class="eval-card">`;
 
-  // Badge
+  // Badge with icon + meaning
+  const decIcon = d.decision==='TICK'?'&#10003;':d.decision==='CLIP'?'&#9202;':'&#10007;';
+  const decLabel = d.decision==='TICK'?'Buy Now':d.decision==='CLIP'?'Watch & Wait':'Avoid';
   h += `<div class="badge-row">
-    <span class="badge ${d.decision}">${d.decision}</span>
+    <span class="badge ${d.decision}"><span class="badge-icon">${decIcon}</span> ${d.decision}</span>
+    <span class="badge-meaning">= ${decLabel}</span>
     <div class="conf-bar"><div class="cl">Confidence ${d.confidence}%</div>
       <div class="ct"><div class="cf" style="width:${d.confidence}%;background:${cc}"></div></div>
     </div></div>`;
