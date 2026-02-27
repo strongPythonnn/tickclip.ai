@@ -162,7 +162,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
     import asyncio
 
     results = await asyncio.gather(
-        fetch_retailer_prices(keepa["title"]),
+        fetch_retailer_prices(keepa["title"], keepa["current_price"]),
         fetch_deals(keepa["title"]),
         fetch_reviews(keepa["title"]),
         fetch_alternatives(keepa["title"]),
@@ -171,12 +171,17 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         return_exceptions=True,
     )
 
-    retailer_prices = results[0] if isinstance(results[0], list) else []
+    # fetch_retailer_prices now returns {items, price_insight}
+    retailer_result = results[0] if isinstance(results[0], dict) else {}
+    retailer_prices = retailer_result.get("items", []) if isinstance(retailer_result, dict) else []
+    price_insight = retailer_result.get("price_insight", {}) if isinstance(retailer_result, dict) else {}
     deals = results[1] if isinstance(results[1], list) else []
     review_data = results[2] if isinstance(results[2], dict) else {"reviews": [], "summary": {}}
     alternatives = results[3] if isinstance(results[3], list) else []
     diy_articles = results[4] if isinstance(results[4], list) else []
     amazon_deals = results[5] if isinstance(results[5], list) else []
+
+    amazon_url = f"https://www.amazon.com/dp/{asin}"
 
     return {
         "asin": asin,
@@ -195,11 +200,13 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         "explanation": decision_result["explanation"],
         "price_series": keepa["price_series"],
         "price_manipulation": keepa.get("price_manipulation", {}),
+        "amazon_url": amazon_url,
         "amazon_offers": amazon_offers,
         "amazon_promotions": amazon_promotions,
         "amazon_offer_summaries": amazon_offer_summaries,
         "amazon_deals": amazon_deals,
         "retailer_prices": retailer_prices,
+        "price_insight": price_insight,
         "deals": deals,
         "review_analysis": review_data,
         "alternatives": alternatives,

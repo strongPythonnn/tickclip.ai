@@ -1043,12 +1043,20 @@ async def _serper_search(query: str, max_results: int = 8) -> list[dict]:
             source = _urlparse(url).netloc.replace("www.", "")
             if not source:
                 continue
-            results.append({
+            entry: dict = {
                 "title": item.get("title", ""),
                 "url": url,
                 "snippet": item.get("snippet", ""),
                 "source": source,
-            })
+                "favicon": f"https://www.google.com/s2/favicons?domain={source}&sz=32",
+            }
+            if item.get("rating"):
+                entry["rating"] = item["rating"]
+            if item.get("ratingCount"):
+                entry["rating_count"] = item["ratingCount"]
+            if item.get("date"):
+                entry["date"] = item["date"]
+            results.append(entry)
         return results
     except Exception:
         return []
@@ -1134,8 +1142,11 @@ RETAILER_META = {
 }
 
 
+_PRICE_RE = _re.compile(r"\$[\d,]+\.?\d*")
+
+
 def _enrich_result(item: dict, category: str) -> dict:
-    """Add retailer metadata and category tag to a search result."""
+    """Add retailer metadata, favicon, extracted price, and category tag."""
     domain = item.get("source", "")
     # Match against known retailers
     meta = None
@@ -1145,7 +1156,18 @@ def _enrich_result(item: dict, category: str) -> dict:
             break
     item["retailer_name"] = meta["name"] if meta else domain.split(".")[0].title()
     item["retailer_color"] = meta["color"] if meta else "#6b7280"
-    item["category"] = category  # "retailer", "deal", "alternative", "diy"
+    item["category"] = category
+    # Favicon (Serper results already have one; add for DDG fallback)
+    if "favicon" not in item:
+        item["favicon"] = f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
+    # Extract price from snippet text
+    snippet = item.get("snippet", "") + " " + item.get("title", "")
+    price_match = _PRICE_RE.search(snippet)
+    if price_match:
+        try:
+            item["extracted_price"] = float(price_match.group().replace("$", "").replace(",", ""))
+        except ValueError:
+            pass
     return item
 
 
@@ -1156,10 +1178,10 @@ async def _search_source(query_template: str, product: str, category: str, max_r
     return [_enrich_result(r, category) for r in results]
 
 
-async def fetch_retailer_prices(product_title: str) -> list[dict]:
+async def fetch_retailer_prices(product_title: str, amazon_price: float | None = None) -> dict:
     """
     Search across Walmart, Best Buy, Target, Costco, Newegg for the product.
-    Returns tagged results from each retailer.
+    Returns {items: [...], price_insight: {...}}.
     """
     tasks = [
         _search_source(tpl, product_title, "retailer", 2)
@@ -1170,7 +1192,20 @@ async def fetch_retailer_prices(product_title: str) -> list[dict]:
     for group in groups:
         if isinstance(group, list):
             combined.extend(group)
-    return combined
+
+    # Build price insight from extracted prices
+    price_insight: dict = {}
+    priced = [(r["extracted_price"], r.get("retailer_name", "")) for r in combined if r.get("extracted_price")]
+    if priced:
+        lowest_price, best_retailer = min(priced, key=lambda x: x[0])
+        price_insight["lowest_found"] = lowest_price
+        price_insight["best_retailer"] = best_retailer
+        if amazon_price and amazon_price > 0:
+            diff = round(amazon_price - lowest_price, 2)
+            if diff > 0:
+                price_insight["savings_vs_amazon"] = diff
+
+    return {"items": combined, "price_insight": price_insight}
 
 
 async def fetch_deals(product_title: str) -> list[dict]:

@@ -291,6 +291,46 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
 .features-list li { font-size: .76rem; color: #374151; padding: 3px 0; border-bottom: 1px solid #f3f4f6;
   display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .brand-label { font-size: .76rem; color: #6b7280; margin-bottom: 4px; }
+.amazon-btn {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  padding: 7px 16px; font-size: .78rem; font-weight: 600; color: #1a1a1a;
+  background: #ff9900; border-radius: 8px; text-decoration: none;
+  transition: background .15s;
+}
+.amazon-btn:hover { background: #e68a00; text-decoration: none; }
+
+/* Favicon on cards */
+.sl-favicon, .sc-favicon { width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0; }
+.sl-price-tag {
+  font-size: .68rem; font-weight: 700; color: #065f46; background: #d1fae5;
+  padding: 1px 6px; border-radius: 4px; margin-left: auto;
+}
+.sl-rating { font-size: .64rem; color: #f59e0b; margin-left: auto; white-space: nowrap; }
+.sl-date { font-size: .6rem; color: #9ca3af; }
+
+/* Price comparison card */
+.price-compare-card {
+  background: #fff; border-radius: 14px; padding: 20px 18px;
+  border: 1px solid #e5e7eb; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+}
+.price-compare-card h3 { font-size: .88rem; font-weight: 700; margin-bottom: 10px; }
+.pc-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: .8rem; }
+.pc-row .pc-label { color: #6b7280; }
+.pc-row .pc-value { font-weight: 700; }
+.pc-savings {
+  margin-top: 8px; padding: 8px 12px; border-radius: 8px;
+  background: #d1fae5; font-size: .78rem; font-weight: 600; color: #065f46; text-align: center;
+}
+
+/* Quick links */
+.quick-links { display: flex; flex-direction: column; gap: 6px; }
+.ql-link {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border: 1px solid #e5e7eb; border-radius: 8px; text-decoration: none;
+  color: #1a1a1a; font-size: .78rem; font-weight: 500; transition: background .1s;
+}
+.ql-link:hover { background: #f9fafb; text-decoration: none; }
+.ql-icon { font-size: 1rem; flex-shrink: 0; width: 20px; text-align: center; }
 
 /* Amazon deal card in grid */
 .amz-deal {
@@ -442,7 +482,9 @@ function render(d) {
   if (d.image) h += `<img src="${d.image}" alt="" />`;
   h += `<div><h2>${esc(d.title)}</h2>`;
   if (d.brand) h += `<span class="brand-label">by ${esc(d.brand)}</span> `;
-  h += `<span class="asin">${d.asin}</span></div></div>`;
+  h += `<span class="asin">${d.asin}</span>`;
+  if (d.amazon_url) h += `<a href="${esc(d.amazon_url)}" target="_blank" rel="noopener" class="amazon-btn">View on Amazon &#8594;</a>`;
+  h += `</div></div>`;
 
   // Metrics
   const rk = d.seller_risk==='low'?'gd':d.seller_risk==='high'?'bd':'wn';
@@ -523,7 +565,9 @@ function render(d) {
       const sl = r.sentiment?r.sentiment.label:'neutral';
       h += `<a href="${esc(r.url)}" target="_blank" rel="noopener" class="rv-item">
         <div class="rv-top">
+          ${r.favicon?`<img class="sl-favicon" src="${r.favicon}" alt=""/>`:''}
           <span class="rv-badge" style="background:${r.review_color||'#6b7280'}">${esc(r.review_source||r.source)}</span>
+          ${r.date?`<span class="sl-date">${esc(r.date)}</span>`:''}
           <span class="rv-sent ${sl}">${sl}</span>
         </div>
         <div class="rv-title">${esc(r.title)}</div>
@@ -534,13 +578,28 @@ function render(d) {
   }
   h += `</div>`; // review-card
 
+  // Price Comparison card
+  if (d.price_insight && (d.price_insight.lowest_found || d.price_insight.savings_vs_amazon)) {
+    const pi = d.price_insight;
+    h += `<div class="price-compare-card"><h3>Price Comparison</h3>`;
+    if (d.current_price) h += `<div class="pc-row"><span class="pc-label">Amazon</span><span class="pc-value">$${fmt(d.current_price)}</span></div>`;
+    if (pi.lowest_found) h += `<div class="pc-row"><span class="pc-label">${esc(pi.best_retailer||'Best Price')}</span><span class="pc-value" style="color:#10b981">$${fmt(pi.lowest_found)}</span></div>`;
+    if (pi.savings_vs_amazon > 0) h += `<div class="pc-savings">Save $${fmt(pi.savings_vs_amazon)} at ${esc(pi.best_retailer||'another retailer')}</div>`;
+    h += `</div>`;
+  }
+
   // Retailers in sidebar
   if (d.retailer_prices && d.retailer_prices.length) {
     h += `<div class="side-section"><h3>Shop Across Retailers<span class="cnt">${d.retailer_prices.length}</span></h3>`;
     h += `<div class="side-list">`;
     d.retailer_prices.forEach(a => {
       h += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="sl-item">
-        <div class="sl-top"><span class="sl-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span></div>
+        <div class="sl-top">
+          ${a.favicon?`<img class="sl-favicon" src="${a.favicon}" alt=""/>`:''}
+          <span class="sl-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span>
+          ${a.extracted_price?`<span class="sl-price-tag">$${fmt(a.extracted_price)}</span>`:''}
+          ${a.rating?`<span class="sl-rating">${'&#9733;'.repeat(Math.round(a.rating))} ${a.rating}${a.rating_count?' ('+a.rating_count+')':''}</span>`:''}
+        </div>
         <div class="sl-title">${esc(a.title)}</div>
         ${a.snippet?`<div class="sl-snip">${esc(a.snippet)}</div>`:''}
       </a>`;
@@ -554,7 +613,12 @@ function render(d) {
     h += `<div class="side-list">`;
     d.deals.forEach(a => {
       h += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="sl-item">
-        <div class="sl-top"><span class="sl-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span></div>
+        <div class="sl-top">
+          ${a.favicon?`<img class="sl-favicon" src="${a.favicon}" alt=""/>`:''}
+          <span class="sl-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span>
+          ${a.extracted_price?`<span class="sl-price-tag">$${fmt(a.extracted_price)}</span>`:''}
+          ${a.date?`<span class="sl-date">${esc(a.date)}</span>`:''}
+        </div>
         <div class="sl-title">${esc(a.title)}</div>
         ${a.snippet?`<div class="sl-snip">${esc(a.snippet)}</div>`:''}
       </a>`;
@@ -565,8 +629,9 @@ function render(d) {
   // Amazon Offers (from PA-API)
   if (d.amazon_offers && d.amazon_offers.length) {
     h += `<div class="side-section"><h3>Amazon Offers<span class="cnt">${d.amazon_offers.length}</span></h3>`;
+    const offerUrl = d.amazon_url || '#';
     d.amazon_offers.forEach(o => {
-      h += `<div class="offer-item"><div class="offer-top">`;
+      h += `<a href="${esc(offerUrl)}" target="_blank" rel="noopener" class="offer-item" style="display:block;text-decoration:none;color:inherit;cursor:pointer"><div class="offer-top">`;
       if (o.price_display) h += `<span class="offer-price">${esc(o.price_display)}</span>`;
       if (o.was_price_display) h += `<span class="offer-was">${esc(o.was_price_display)}</span>`;
       if (o.savings_pct) h += `<span class="offer-save">-${o.savings_pct}%</span>`;
@@ -576,7 +641,7 @@ function render(d) {
       h += `</div>`;
       if (o.merchant_name) h += `<div class="offer-merchant">Sold by ${esc(o.merchant_name)}${o.condition!=='New'?' &middot; '+esc(o.condition):''}</div>`;
       if (o.availability) h += `<div class="offer-avail">${esc(o.availability)}</div>`;
-      h += `</div>`;
+      h += `</a>`;
     });
 
     // Promotions
@@ -609,6 +674,15 @@ function render(d) {
     d.features.forEach(f => h += `<li>${esc(f)}</li>`);
     h += `</ul></div>`;
   }
+
+  // Quick Links
+  h += `<div class="side-section"><h3>Quick Links</h3><div class="quick-links">`;
+  if (d.amazon_url) h += `<a href="${esc(d.amazon_url)}" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128722;</span>View on Amazon</a>`;
+  h += `<a href="https://camelcamelcamel.com/product/${d.asin}" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128200;</span>CamelCamelCamel Price History</a>`;
+  const gq = encodeURIComponent(d.title + ' best price');
+  h += `<a href="https://www.google.com/search?q=${gq}&tbm=shop" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128269;</span>Google Shopping</a>`;
+  h += `<a href="https://www.google.com/search?q=${encodeURIComponent(d.title + ' review')}" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128196;</span>Search Reviews</a>`;
+  h += `</div></div>`;
 
   h += `</div>`; // sidebar
   h += `</div>`; // layout
@@ -647,7 +721,12 @@ function render(d) {
     h += `<div class="source-grid">`;
     d.alternatives.forEach(a => {
       h += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="sc">
-        <div class="sc-top"><span class="sc-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span><span class="sc-cat">Alternative</span></div>
+        <div class="sc-top">
+          ${a.favicon?`<img class="sc-favicon" src="${a.favicon}" alt=""/>`:''}
+          <span class="sc-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span>
+          ${a.date?`<span class="sl-date">${esc(a.date)}</span>`:''}
+          <span class="sc-cat">Alternative</span>
+        </div>
         <div class="sc-title">${esc(a.title)}</div>
         ${a.snippet?`<div class="sc-snip">${esc(a.snippet)}</div>`:''}
       </a>`;
@@ -661,7 +740,12 @@ function render(d) {
     h += `<div class="source-grid">`;
     d.diy_articles.forEach(a => {
       h += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="sc">
-        <div class="sc-top"><span class="sc-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span><span class="sc-cat">DIY</span></div>
+        <div class="sc-top">
+          ${a.favicon?`<img class="sc-favicon" src="${a.favicon}" alt=""/>`:''}
+          <span class="sc-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span>
+          ${a.date?`<span class="sl-date">${esc(a.date)}</span>`:''}
+          <span class="sc-cat">DIY</span>
+        </div>
         <div class="sc-title">${esc(a.title)}</div>
         ${a.snippet?`<div class="sc-snip">${esc(a.snippet)}</div>`:''}
       </a>`;
