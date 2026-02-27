@@ -26,6 +26,7 @@ from api.utils import (
     search_amazon_deals,
     search_keepa,
 )
+from api.agent import analyze_manipulation
 
 load_dotenv()
 
@@ -160,7 +161,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         keepa.get("price_manipulation"),
     )
 
-    # 3. All web searches in parallel (19 Serper calls)
+    # 3. All web searches + AI manipulation analysis in parallel
     results = await asyncio.gather(
         fetch_retailer_prices(keepa["title"], keepa["current_price"]),
         fetch_deals(keepa["title"]),
@@ -168,6 +169,14 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         fetch_alternatives(keepa["title"]),
         fetch_diy_articles(keepa["title"]),
         search_amazon_deals(keepa["title"]),
+        analyze_manipulation(
+            title=keepa["title"],
+            current_price=keepa["current_price"],
+            manipulation_data=keepa.get("price_manipulation", {}),
+            decision=decision_result["decision"],
+            hist_low=keepa["hist_low"],
+            avg_90d=keepa["avg_90d"],
+        ),
         return_exceptions=True,
     )
 
@@ -180,6 +189,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
     alternatives = results[3] if isinstance(results[3], list) else []
     diy_articles = results[4] if isinstance(results[4], list) else []
     amazon_deals = results[5] if isinstance(results[5], list) else []
+    ai_manipulation_analysis = results[6] if isinstance(results[6], str) else ""
 
     amazon_url = f"https://www.amazon.com/dp/{asin}"
 
@@ -200,6 +210,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         "explanation": decision_result["explanation"],
         "price_series": keepa["price_series"],
         "price_manipulation": keepa.get("price_manipulation", {}),
+        "manipulation_ai_analysis": ai_manipulation_analysis,
         "amazon_url": amazon_url,
         "amazon_offers": amazon_offers,
         "amazon_promotions": amazon_promotions,

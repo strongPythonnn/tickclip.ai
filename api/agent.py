@@ -438,3 +438,86 @@ class FiduciaryAgent:
             "tools_used": list(set(tools_used)),
             "data": tool_data,
         }
+
+
+# ---------------------------------------------------------------------------
+# Standalone AI analysis — Price Manipulation
+# ---------------------------------------------------------------------------
+
+MANIPULATION_PROMPT = """You are TickClip's price manipulation analyst. Given the raw manipulation detection data for a product, write a concise, honest analysis (3-5 sentences) that a shopper can understand.
+
+Rules:
+- Be direct and specific. Cite exact numbers (prices, percentages, dates).
+- If manipulation is detected, explain what it means for the shopper in plain language.
+- If no manipulation, briefly reassure the shopper and note the product's pricing health.
+- Never sugarcoat. If the deal is fake, say so clearly.
+- End with one actionable recommendation (buy now, wait, or avoid).
+- Do NOT use markdown formatting, bullet points, or headers. Just write plain paragraph text."""
+
+
+async def analyze_manipulation(
+    title: str,
+    current_price: float | None,
+    manipulation_data: dict,
+    decision: str,
+    hist_low: float | None = None,
+    avg_90d: float | None = None,
+) -> str:
+    """
+    Use Claude to write a human-readable analysis of price manipulation findings.
+
+    Returns a plain-text paragraph (3-5 sentences). Returns empty string if
+    the API key is missing or the call fails.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return ""
+
+    # Build a data summary for the prompt
+    risk = manipulation_data.get("risk_level", "none")
+    score = manipulation_data.get("score", 0)
+    tactics = manipulation_data.get("tactics", [])
+    is_fake = manipulation_data.get("is_fake_deal", False)
+    true_market = manipulation_data.get("true_market_price")
+    inflated_pct = manipulation_data.get("inflated_by_pct")
+
+    tactics_text = ""
+    for t in tactics:
+        tactics_text += f"- {t['tactic']} ({t['severity']}): {t['description']}"
+        if t.get("evidence"):
+            tactics_text += f" Evidence: {t['evidence']}"
+        tactics_text += "\n"
+
+    user_msg = f"""Product: {title}
+Current Price: ${current_price if current_price else 'N/A'}
+Historic Low: ${hist_low if hist_low else 'N/A'}
+90-Day Average: ${avg_90d if avg_90d else 'N/A'}
+TickClip Decision: {decision}
+
+Manipulation Detection Results:
+- Risk Level: {risk}
+- Manipulation Score: {score}/100
+- Is Fake Deal: {is_fake}
+- True Market Price: ${true_market if true_market else 'N/A'}
+- Inflated By: {f'{inflated_pct:.0f}%' if inflated_pct else 'N/A'}
+
+Detected Tactics:
+{tactics_text if tactics_text else 'None detected.'}
+
+Write your analysis:"""
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            system=MANIPULATION_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        for block in response.content:
+            if hasattr(block, "text"):
+                return block.text.strip()
+    except Exception:
+        pass
+
+    return ""

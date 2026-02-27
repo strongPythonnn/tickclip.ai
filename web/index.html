@@ -293,6 +293,35 @@ header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
 .tactic-desc { font-size: .78rem; color: #374151; line-height: 1.45; }
 .tactic-evidence { font-size: .7rem; color: #9ca3af; margin-top: 4px; }
 
+/* ── AI Manipulation Analysis ── */
+.ai-manip-analysis {
+  background: linear-gradient(135deg, #ede9fe 0%, #e0e7ff 100%);
+  border: 1px solid #c4b5fd;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.ai-manip-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ai-manip-icon { font-size: 1.1rem; }
+.ai-manip-label {
+  font-size: .75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: #6d28d9;
+}
+.ai-manip-text {
+  font-size: .82rem;
+  line-height: 1.55;
+  color: #1e1b4b;
+  margin: 0;
+}
+
 /* ── Amazon offers ── */
 .offer-item {
   padding: 10px 12px; border: 1px solid #f3f4f6; border-radius: 8px; margin-bottom: 6px;
@@ -633,7 +662,7 @@ function render(d) {
     h += `<div class="chart-box"><h3>Price History</h3>${buildChart(d.price_series, cc)}</div>`;
 
   // Price manipulation analysis
-  h += renderManipulation(d.price_manipulation, d.current_price);
+  h += renderManipulation(d.price_manipulation, d.current_price, d.manipulation_ai_analysis);
 
   h += `</div>`; // eval-card
   h += `</div>`; // main-col
@@ -886,7 +915,7 @@ function render(d) {
 }
 
 /* ── Price manipulation card ── */
-function renderManipulation(pm, currentPrice) {
+function renderManipulation(pm, currentPrice, aiAnalysis) {
   if (!pm || pm.risk_level === undefined) return '';
   const rl = pm.risk_level; // none, low, medium, high
   const icons = { none: '\u2705', low: '\u2705', medium: '\u26A0\uFE0F', high: '\uD83D\uDEA8' };
@@ -911,6 +940,17 @@ function renderManipulation(pm, currentPrice) {
     </div>
     <span class="manip-score-label">Risk ${pm.score}/100</span>
   </div>`;
+
+  // AI Analysis — the fiduciary verdict
+  if (aiAnalysis) {
+    h += `<div class="ai-manip-analysis">
+      <div class="ai-manip-header">
+        <span class="ai-manip-icon">\uD83E\uDDE0</span>
+        <span class="ai-manip-label">AI Analyst Verdict</span>
+      </div>
+      <p class="ai-manip-text">${esc(aiAnalysis)}</p>
+    </div>`;
+  }
 
   // True market price vs current
   if (pm.true_market_price != null) {
