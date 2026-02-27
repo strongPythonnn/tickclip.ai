@@ -19,3 +19,5 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: TICKCLIP_DEFAULT_MARKET
+        sync: false

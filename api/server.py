@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.market_config import get_market
 from api.utils import (
     batch_evaluate_asins,
     compute_decision,
@@ -67,8 +68,9 @@ def _extract_asin(text: str) -> str | None:
 
 
 @app.get("/api/search")
-async def search(q: str = Query(..., min_length=1)):
+async def search(q: str = Query(..., min_length=1), market: str = Query("us")):
     """Search for products by keyword.  Returns list of ASINs with TICK/CLIP/SKIP decisions."""
+    mk = get_market(market)
     keepa_key = os.getenv("KEEPA_API_KEY")
     if not keepa_key:
         raise HTTPException(503, "Keepa API key is not configured.")
@@ -77,28 +79,32 @@ async def search(q: str = Query(..., min_length=1)):
     asin = _extract_asin(q)
     if asin:
         # Evaluate single ASIN immediately
-        evals = await batch_evaluate_asins([asin], keepa_key)
+        evals = await batch_evaluate_asins([asin], keepa_key, mk)
         info = evals.get(asin, {})
-        return {"results": [{
-            "asin": asin,
-            "title": info.get("title"),
-            "image": info.get("image"),
-            "current_price": info.get("current_price"),
-            "decision": info.get("decision", "CLIP"),
-            "confidence": info.get("confidence", 0),
-        }]}
+        return {
+            "results": [{
+                "asin": asin,
+                "title": info.get("title"),
+                "image": info.get("image"),
+                "current_price": info.get("current_price"),
+                "decision": info.get("decision", "CLIP"),
+                "confidence": info.get("confidence", 0),
+            }],
+            "currency_symbol": mk.currency_symbol,
+            "market": mk.code,
+        }
 
     try:
-        results = await search_keepa(q, keepa_key)
+        results = await search_keepa(q, keepa_key, mk)
     except Exception:
         results = []
 
     if not results:
-        return {"results": []}
+        return {"results": [], "currency_symbol": mk.currency_symbol, "market": mk.code}
 
     # Batch evaluate all found ASINs to get TICK/CLIP/SKIP
     asins = [r["asin"] for r in results]
-    evals = await batch_evaluate_asins(asins, keepa_key)
+    evals = await batch_evaluate_asins(asins, keepa_key, mk)
 
     # Merge evaluation data into results
     enriched = []
@@ -113,12 +119,13 @@ async def search(q: str = Query(..., min_length=1)):
             "confidence": info.get("confidence", 0),
         })
 
-    return {"results": enriched}
+    return {"results": enriched, "currency_symbol": mk.currency_symbol, "market": mk.code}
 
 
 @app.get("/api/evaluate")
-async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
+async def evaluate(asin: str = Query(..., min_length=10, max_length=10), market: str = Query("us")):
     """Full fiduciary evaluation for a single ASIN."""
+    mk = get_market(market)
     if not ASIN_RE.match(asin):
         raise HTTPException(400, "Invalid ASIN format.")
 
@@ -127,8 +134,8 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         raise HTTPException(503, "Keepa API key is not configured.")
 
     # 1. Keepa + Amazon PA-API in parallel (both only need ASIN)
-    keepa_task = fetch_keepa(asin, keepa_key)
-    amazon_task = enrich_from_amazon(asin)
+    keepa_task = fetch_keepa(asin, keepa_key, mk)
+    amazon_task = enrich_from_amazon(asin, mk)
     keepa_result, amazon = await asyncio.gather(keepa_task, amazon_task, return_exceptions=True)
 
     if isinstance(keepa_result, Exception):
@@ -159,16 +166,17 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         keepa["volatility_score"],
         keepa["seller_risk"],
         keepa.get("price_manipulation"),
+        mk,
     )
 
     # 3. All web searches + AI manipulation analysis in parallel
     results = await asyncio.gather(
-        fetch_retailer_prices(keepa["title"], keepa["current_price"]),
-        fetch_deals(keepa["title"]),
-        fetch_reviews(keepa["title"]),
-        fetch_alternatives(keepa["title"]),
-        fetch_diy_articles(keepa["title"]),
-        search_amazon_deals(keepa["title"]),
+        fetch_retailer_prices(keepa["title"], keepa["current_price"], mk),
+        fetch_deals(keepa["title"], mk),
+        fetch_reviews(keepa["title"], mk),
+        fetch_alternatives(keepa["title"], mk),
+        fetch_diy_articles(keepa["title"], mk),
+        search_amazon_deals(keepa["title"], mk),
         analyze_manipulation(
             title=keepa["title"],
             current_price=keepa["current_price"],
@@ -176,6 +184,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
             decision=decision_result["decision"],
             hist_low=keepa["hist_low"],
             avg_90d=keepa["avg_90d"],
+            market=mk,
         ),
         return_exceptions=True,
     )
@@ -191,7 +200,7 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
     amazon_deals = results[5] if isinstance(results[5], list) else []
     ai_manipulation_analysis = results[6] if isinstance(results[6], str) else ""
 
-    amazon_url = f"https://www.amazon.com/dp/{asin}"
+    amazon_url = f"https://www.{mk.amazon_tld}/dp/{asin}"
 
     return {
         "asin": asin,
@@ -201,6 +210,10 @@ async def evaluate(asin: str = Query(..., min_length=10, max_length=10)):
         "features": amazon_features,
         "current_price": keepa["current_price"],
         "currency": keepa["currency"],
+        "currency_symbol": mk.currency_symbol,
+        "market": mk.code,
+        "amazon_tld": mk.amazon_tld,
+        "camel_base": mk.camel_base,
         "hist_low": keepa["hist_low"],
         "avg_90d": keepa["avg_90d"],
         "volatility_score": keepa["volatility_score"],
@@ -236,6 +249,7 @@ class ChatRequest(BaseModel):
     message: str
     asin: str | None = None
     history: list[dict] | None = None
+    market: str | None = "us"
 
 
 @app.post("/api/chat")

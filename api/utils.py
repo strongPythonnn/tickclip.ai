@@ -14,6 +14,8 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from api.market_config import MarketConfig, get_market
+
 # ---------------------------------------------------------------------------
 # Keepa helpers
 # ---------------------------------------------------------------------------
@@ -49,13 +51,15 @@ def _parse_keepa_csv(csv_data: list[int | None]) -> list[dict]:
     return points
 
 
-async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
+async def fetch_keepa(asin: str, api_key: str, market: MarketConfig | None = None) -> dict[str, Any]:
     """
     Call Keepa product endpoint.  Returns dict with:
       title, image, current_price, currency, hist_low, avg_90d,
       volatility_score, seller_risk, price_series
     """
-    params = {"key": api_key, "domain": 1, "asin": asin, "history": 1, "stats": 90}
+    if market is None:
+        market = get_market()
+    params = {"key": api_key, "domain": market.keepa_domain, "asin": asin, "history": 1, "stats": 90}
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(f"{KEEPA_BASE}/product", params=params)
         resp.raise_for_status()
@@ -73,7 +77,7 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
     images = product.get("imagesCSV")
     if images:
         first = images.split(",")[0]
-        image_url = f"https://images-na.ssl-images-amazon.com/images/I/{first}"
+        image_url = f"https://{market.image_cdn}.ssl-images-amazon.com/images/I/{first}"
 
     # Price CSV — index 0 = Amazon price, index 1 = marketplace/new
     csv_amazon = product.get("csv", [None])[0] or []
@@ -156,13 +160,13 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
         seller_risk = "medium"
 
     # Price manipulation analysis
-    manipulation = detect_price_manipulation(series, current_price, hist_low, avg_90d)
+    manipulation = detect_price_manipulation(series, current_price, hist_low, avg_90d, market)
 
     return {
         "title": title,
         "image": image_url,
         "current_price": current_price,
-        "currency": "USD",
+        "currency": market.currency_code,
         "hist_low": hist_low,
         "avg_90d": avg_90d,
         "volatility_score": volatility_score,
@@ -176,13 +180,15 @@ async def fetch_keepa(asin: str, api_key: str) -> dict[str, Any]:
 # Keepa search (by keyword)
 # ---------------------------------------------------------------------------
 
-async def search_amazon_products(query: str) -> list[dict]:
+async def search_amazon_products(query: str, market: MarketConfig | None = None) -> list[dict]:
     """Search Amazon PA-API SearchItems for products by keyword.
     Returns list of {asin, title, image}."""
+    if market is None:
+        market = get_market()
     if not _pa_api_available():
         return []
     partner_tag = os.environ["AMAZON_PARTNER_TAG"]
-    host = "webservices.amazon.com"
+    host = market.amazon_host
     payload = {
         "Keywords": query,
         "SearchIndex": "All",
@@ -193,10 +199,10 @@ async def search_amazon_products(query: str) -> list[dict]:
         ],
         "PartnerTag": partner_tag,
         "PartnerType": "Associates",
-        "Marketplace": "www.amazon.com",
+        "Marketplace": market.amazon_marketplace,
     }
     payload_bytes = json.dumps(payload).encode()
-    headers = _sign_pa_request(payload_bytes, "SearchItems")
+    headers = _sign_pa_request(payload_bytes, "SearchItems", market)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
@@ -219,18 +225,20 @@ async def search_amazon_products(query: str) -> list[dict]:
         return []
 
 
-async def search_keepa(query: str, api_key: str) -> list[dict]:
+async def search_keepa(query: str, api_key: str, market: MarketConfig | None = None) -> list[dict]:
     """Search for products matching a keyword.  Returns list of {asin, title, image}.
     Priority: Amazon PA-API > Keepa search > DuckDuckGo fallback."""
+    if market is None:
+        market = get_market()
 
     # 1. Try Amazon PA-API SearchItems (most reliable)
-    pa_results = await search_amazon_products(query)
+    pa_results = await search_amazon_products(query, market)
     if pa_results:
         return pa_results
 
     # 2. Try Keepa search
     try:
-        params = {"key": api_key, "domain": 1, "type": "product", "term": query}
+        params = {"key": api_key, "domain": market.keepa_domain, "type": "product", "term": query}
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(f"{KEEPA_BASE}/search", params=params)
             resp.raise_for_status()
@@ -245,12 +253,16 @@ async def search_keepa(query: str, api_key: str) -> list[dict]:
         pass
 
     # 3. Fallback: DuckDuckGo Amazon search to find ASINs
-    return await _search_amazon_ddg(query)
+    return await _search_amazon_ddg(query, market)
 
 
-async def _search_amazon_ddg(query: str) -> list[dict]:
+async def _search_amazon_ddg(query: str, market: MarketConfig | None = None) -> list[dict]:
     """Search DuckDuckGo for Amazon products and extract ASINs from URLs."""
     import re as _r
+
+    if market is None:
+        market = get_market()
+    tld = market.amazon_tld
 
     asin_pat = _r.compile(r"/(?:dp|gp/product|ASIN)/([A-Z0-9]{10})")
     seen: set[str] = set()
@@ -258,10 +270,10 @@ async def _search_amazon_ddg(query: str) -> list[dict]:
 
     # Multiple strategies to find individual product pages (not search pages)
     search_queries = [
-        f"amazon.com/dp {query}",              # targets product detail pages
-        f"site:amazon.com/dp/ {query}",        # site-scoped to /dp/ paths
+        f"{tld}/dp {query}",                  # targets product detail pages
+        f"site:{tld}/dp/ {query}",            # site-scoped to /dp/ paths
         f"amazon {query} best seller review",  # finds product reviews with links
-        f"amazon.com {query}",                 # broad fallback
+        f"{tld} {query}",                      # broad fallback
     ]
 
     for sq in search_queries:
@@ -279,9 +291,10 @@ async def _search_amazon_ddg(query: str) -> list[dict]:
                     seen.add(asin)
                     title = item.get("title", "")
                     # Clean up Amazon suffixes from title
-                    for suffix in [" : Amazon.com", " - Amazon.com", " | Amazon.com",
+                    for suffix in [f" : Amazon.{tld.split('.')[-1]}",
+                                   f" - Amazon.{tld.split('.')[-1]}",
                                    " : Amazon", " - Amazon", "Amazon.com: ",
-                                   " - Amazon.com:", " | Amazon"]:
+                                   "Amazon.co.uk: ", " | Amazon"]:
                         title = title.replace(suffix, "")
                     title = title.strip()
                     results.append({
@@ -295,15 +308,17 @@ async def _search_amazon_ddg(query: str) -> list[dict]:
     return results
 
 
-async def batch_evaluate_asins(asins: list[str], api_key: str) -> dict[str, dict]:
+async def batch_evaluate_asins(asins: list[str], api_key: str, market: MarketConfig | None = None) -> dict[str, dict]:
     """Fetch Keepa data for multiple ASINs and compute quick TICK/CLIP/SKIP decisions.
     Returns {asin: {title, image, current_price, decision, confidence}} for each ASIN."""
+    if market is None:
+        market = get_market()
     if not asins:
         return {}
 
     # Keepa supports comma-separated ASINs (up to 100)
     asin_str = ",".join(asins)
-    params = {"key": api_key, "domain": 1, "asin": asin_str, "stats": 90}
+    params = {"key": api_key, "domain": market.keepa_domain, "asin": asin_str, "stats": 90}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(f"{KEEPA_BASE}/product", params=params)
@@ -325,7 +340,7 @@ async def batch_evaluate_asins(asins: list[str], api_key: str) -> dict[str, dict
         images = product.get("imagesCSV")
         if images:
             first = images.split(",")[0]
-            image_url = f"https://images-na.ssl-images-amazon.com/images/I/{first}"
+            image_url = f"https://{market.image_cdn}.ssl-images-amazon.com/images/I/{first}"
 
         stats = product.get("stats", {})
 
@@ -378,12 +393,14 @@ def _pa_api_available() -> bool:
     return all(os.getenv(k) for k in ("AMAZON_ACCESS_KEY", "AMAZON_SECRET_KEY", "AMAZON_PARTNER_TAG"))
 
 
-def _sign_pa_request(payload_bytes: bytes, target: str) -> dict[str, str]:
+def _sign_pa_request(payload_bytes: bytes, target: str, market: MarketConfig | None = None) -> dict[str, str]:
     """AWS Signature V4 for PA-API."""
+    if market is None:
+        market = get_market()
     access = os.environ["AMAZON_ACCESS_KEY"]
     secret = os.environ["AMAZON_SECRET_KEY"]
-    region = os.getenv("AMAZON_REGION", "us-east-1")
-    host = f"webservices.amazon.com"
+    region = os.getenv("AMAZON_REGION", market.amazon_region)
+    host = market.amazon_host
     service = "ProductAdvertisingAPI"
     now = datetime.now(tz=timezone.utc)
     datestamp = now.strftime("%Y%m%d")
@@ -425,7 +442,7 @@ def _sign_pa_request(payload_bytes: bytes, target: str) -> dict[str, str]:
     }
 
 
-async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
+async def enrich_from_amazon(asin: str, market: MarketConfig | None = None) -> dict[str, Any] | None:
     """
     Fetch rich product data from Amazon PA-API:
     - Title, image
@@ -434,10 +451,12 @@ async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
     - Seller ratings
     - Similar products
     """
+    if market is None:
+        market = get_market()
     if not _pa_api_available():
         return None
     partner_tag = os.environ["AMAZON_PARTNER_TAG"]
-    host = "webservices.amazon.com"
+    host = market.amazon_host
     payload = {
         "ItemIds": [asin],
         "Resources": [
@@ -463,10 +482,10 @@ async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
         ],
         "PartnerTag": partner_tag,
         "PartnerType": "Associates",
-        "Marketplace": "www.amazon.com",
+        "Marketplace": market.amazon_marketplace,
     }
     payload_bytes = json.dumps(payload).encode()
-    headers = _sign_pa_request(payload_bytes, "GetItems")
+    headers = _sign_pa_request(payload_bytes, "GetItems", market)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
@@ -504,7 +523,7 @@ async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
 
             offer: dict[str, Any] = {
                 "price": price_info.get("Amount"),
-                "currency": price_info.get("Currency", "USD"),
+                "currency": price_info.get("Currency", market.currency_code),
                 "price_display": price_info.get("DisplayAmount"),
                 "condition": condition.get("Value", "New"),
                 "is_buybox": listing.get("IsBuyBoxWinner", False),
@@ -569,12 +588,14 @@ async def enrich_from_amazon(asin: str) -> dict[str, Any] | None:
         return None
 
 
-async def search_amazon_deals(query: str) -> list[dict]:
+async def search_amazon_deals(query: str, market: MarketConfig | None = None) -> list[dict]:
     """Search Amazon PA-API for deals on similar products."""
+    if market is None:
+        market = get_market()
     if not _pa_api_available():
         return []
     partner_tag = os.environ["AMAZON_PARTNER_TAG"]
-    host = "webservices.amazon.com"
+    host = market.amazon_host
     payload = {
         "Keywords": query,
         "SearchIndex": "All",
@@ -590,10 +611,10 @@ async def search_amazon_deals(query: str) -> list[dict]:
         ],
         "PartnerTag": partner_tag,
         "PartnerType": "Associates",
-        "Marketplace": "www.amazon.com",
+        "Marketplace": market.amazon_marketplace,
     }
     payload_bytes = json.dumps(payload).encode()
-    headers = _sign_pa_request(payload_bytes, "SearchItems")
+    headers = _sign_pa_request(payload_bytes, "SearchItems", market)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
@@ -620,12 +641,12 @@ async def search_amazon_deals(query: str) -> list[dict]:
                 "asin": asin,
                 "title": title,
                 "image": img,
-                "url": f"https://www.amazon.com/dp/{asin}?tag={partner_tag}",
+                "url": f"https://www.{market.amazon_tld}/dp/{asin}?tag={partner_tag}",
                 "price": price.get("Amount"),
                 "price_display": price.get("DisplayAmount"),
                 "merchant": merchant.get("Name", ""),
                 "is_prime": is_prime,
-                "source": "amazon.com",
+                "source": market.amazon_tld,
                 "retailer_name": "Amazon",
                 "retailer_color": "#ff9900",
                 "category": "deal",
@@ -652,11 +673,20 @@ async def search_amazon_deals(query: str) -> list[dict]:
 # Price manipulation detection
 # ---------------------------------------------------------------------------
 
+
+def _fp(price: float, market: MarketConfig | None = None) -> str:
+    """Format a price with the market currency symbol."""
+    if market is None:
+        market = get_market()
+    return f"{market.currency_symbol}{price:.2f}"
+
+
 def detect_price_manipulation(
     series: list[dict],
     current_price: float | None,
     hist_low: float | None,
     avg_90d: float | None,
+    market: MarketConfig | None = None,
 ) -> dict[str, Any]:
     """
     Analyze price history for seller manipulation tactics:
@@ -719,8 +749,8 @@ def detect_price_manipulation(
             manipulation_score += 35 if severity == "high" else 20
             tactics.append({
                 "tactic": "Inflate-then-Discount",
-                "description": f"Price was inflated to ${max_60:.2f} ({pct_spike}% above median ${median_all:.2f}), then \"dropped\" {pct_drop}% to the current ${current_price:.2f}. The sale looks big but the spike was artificial.",
-                "evidence": f"60-day peak ${max_60:.2f} vs. historic median ${median_all:.2f}",
+                "description": f"Price was inflated to {_fp(max_60, market)} ({pct_spike}% above median {_fp(median_all, market)}), then \"dropped\" {pct_drop}% to the current {_fp(current_price, market)}. The sale looks big but the spike was artificial.",
+                "evidence": f"60-day peak {_fp(max_60, market)} vs. historic median {_fp(median_all, market)}",
                 "severity": severity,
             })
 
@@ -742,8 +772,8 @@ def detect_price_manipulation(
                 manipulation_score += 15
                 tactics.append({
                     "tactic": "Fake Sale",
-                    "description": f"The current price ${current_price:.2f} is essentially the regular price (most common: ${mode_price}, seen {mode_pct:.0%} of the time). Any \"sale\" or \"discount\" label is misleading.",
-                    "evidence": f"${mode_price} appears in {mode_pct:.0%} of price history",
+                    "description": f"The current price {_fp(current_price, market)} is essentially the regular price (most common: {_fp(mode_price, market)}, seen {mode_pct:.0%} of the time). Any \"sale\" or \"discount\" label is misleading.",
+                    "evidence": f"{_fp(mode_price, market)} appears in {mode_pct:.0%} of price history",
                     "severity": "medium",
                 })
 
@@ -802,8 +832,8 @@ def detect_price_manipulation(
                     manipulation_score += 20
                     tactics.append({
                         "tactic": "Pre-Event Inflation",
-                        "description": f"Price was raised {inflation_pct}% before {event_name} {year} (to ${max_pre:.2f}), then \"discounted\" during the event to ${min_event:.2f}. The deal was manufactured.",
-                        "evidence": f"Pre-event avg ${avg_pre:.2f} → spike ${max_pre:.2f} → event \"sale\" ${min_event:.2f}",
+                        "description": f"Price was raised {inflation_pct}% before {event_name} {year} (to {_fp(max_pre, market)}), then \"discounted\" during the event to {_fp(min_event, market)}. The deal was manufactured.",
+                        "evidence": f"Pre-event avg {_fp(avg_pre, market)} → spike {_fp(max_pre, market)} → event \"sale\" {_fp(min_event, market)}",
                         "severity": "high",
                     })
                     break  # one example per event is enough
@@ -817,8 +847,8 @@ def detect_price_manipulation(
             manipulation_score += 15
             tactics.append({
                 "tactic": "Creeping Inflation",
-                "description": f"Average price has gradually risen {creep_pct}% (from ${avg_old:.2f} to ${avg_recent:.2f}). Small increases over time are harder to notice but add up.",
-                "evidence": f"Older avg ${avg_old:.2f} → Recent avg ${avg_recent:.2f} (+{creep_pct}%)",
+                "description": f"Average price has gradually risen {creep_pct}% (from {_fp(avg_old, market)} to {_fp(avg_recent, market)}). Small increases over time are harder to notice but add up.",
+                "evidence": f"Older avg {_fp(avg_old, market)} → Recent avg {_fp(avg_recent, market)} (+{creep_pct}%)",
                 "severity": "medium" if creep_pct < 25 else "high",
             })
 
@@ -867,6 +897,7 @@ def compute_decision(
     volatility_score: float,
     seller_risk: str,
     manipulation: dict | None = None,
+    market: MarketConfig | None = None,
 ) -> dict[str, Any]:
     """
     Deterministic, explainable decision engine.
@@ -892,7 +923,7 @@ def compute_decision(
         decision = "TICK"
         confidence = 92
         explanation.append(
-            f"Current price ${current_price:.2f} is within 5% of the all-time low ${hist_low:.2f} — excellent deal."
+            f"Current price {_fp(current_price, market)} is within 5% of the all-time low {_fp(hist_low, market)} — excellent deal."
         )
 
     # TICK — below 90-day average with low volatility
@@ -900,7 +931,7 @@ def compute_decision(
         decision = "TICK"
         confidence = 80
         explanation.append(
-            f"Current price ${current_price:.2f} is {((1 - ratio_to_avg) * 100):.0f}% below the 90-day average ${avg_90d:.2f} with low volatility ({volatility_score:.2%})."
+            f"Current price {_fp(current_price, market)} is {((1 - ratio_to_avg) * 100):.0f}% below the 90-day average {_fp(avg_90d, market)} with low volatility ({volatility_score:.2%})."
         )
 
     # SKIP — significantly above average or well above historic low
@@ -909,11 +940,11 @@ def compute_decision(
         confidence = 78
         if ratio_to_avg >= 1.10:
             explanation.append(
-                f"Current price ${current_price:.2f} is {((ratio_to_avg - 1) * 100):.0f}% above the 90-day average ${avg_90d:.2f} — overpriced."
+                f"Current price {_fp(current_price, market)} is {((ratio_to_avg - 1) * 100):.0f}% above the 90-day average {_fp(avg_90d, market)} — overpriced."
             )
         if ratio_to_low >= 1.25:
             explanation.append(
-                f"Current price ${current_price:.2f} is {((ratio_to_low - 1) * 100):.0f}% above the historic low ${hist_low:.2f} — wait for a drop."
+                f"Current price {_fp(current_price, market)} is {((ratio_to_low - 1) * 100):.0f}% above the historic low {_fp(hist_low, market)} — wait for a drop."
             )
 
     # CLIP — near the average
@@ -921,7 +952,7 @@ def compute_decision(
         decision = "CLIP"
         confidence = 60
         explanation.append(
-            f"Current price ${current_price:.2f} is near the 90-day average ${avg_90d:.2f} (within ±10%). Consider monitoring."
+            f"Current price {_fp(current_price, market)} is near the 90-day average {_fp(avg_90d, market)} (within ±10%). Consider monitoring."
         )
 
     # Volatility — high volatility means the price is unreliable
@@ -967,7 +998,7 @@ def compute_decision(
             if true_price:
                 explanation.append(
                     f"PRICE MANIPULATION: This deal is fake — price was artificially inflated then \"discounted.\" "
-                    f"True market price is ~${true_price:.2f}. Do not buy at this price."
+                    f"True market price is ~{_fp(true_price, market)}. Do not buy at this price."
                 )
             else:
                 explanation.append(
@@ -1004,7 +1035,7 @@ def compute_decision(
         if inflated_pct and inflated_pct > 5:
             if true_price:
                 explanation.append(
-                    f"Current price is ~{inflated_pct:.0f}% above true market value (${true_price:.2f})."
+                    f"Current price is ~{inflated_pct:.0f}% above true market value ({_fp(true_price, market)})."
                 )
             else:
                 explanation.append(
@@ -1034,8 +1065,10 @@ def _get_serper_client() -> httpx.AsyncClient:
     return _serper_client
 
 
-async def _serper_search(query: str, max_results: int = 8) -> list[dict]:
+async def _serper_search(query: str, max_results: int = 8, market: MarketConfig | None = None) -> list[dict]:
     """Search via Serper.dev Google Search API."""
+    if market is None:
+        market = get_market()
     api_key = os.getenv("SERPER_API_KEY")
     if not api_key:
         return []
@@ -1044,7 +1077,7 @@ async def _serper_search(query: str, max_results: int = 8) -> list[dict]:
         resp = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            json={"q": query, "num": max_results},
+            json={"q": query, "num": max_results, "gl": market.serper_gl},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -1103,12 +1136,12 @@ async def _ddgs_search(query: str, max_results: int = 8) -> list[dict]:
         return []
 
 
-async def _web_search(query: str, max_results: int = 8) -> list[dict]:
+async def _web_search(query: str, max_results: int = 8, market: MarketConfig | None = None) -> list[dict]:
     """
     Unified web search: tries Serper.dev first, falls back to duckduckgo-search.
     Returns [{title, url, snippet, source}].
     """
-    results = await _serper_search(query, max_results)
+    results = await _serper_search(query, max_results, market)
     if results:
         return results
     return await _ddgs_search(query, max_results)
@@ -1118,50 +1151,14 @@ async def _web_search(query: str, max_results: int = 8) -> list[dict]:
 # Multi-source retailer & deal searches
 # ---------------------------------------------------------------------------
 
-# Retailer-specific site searches
-_RETAILER_QUERIES = {
-    "walmart": "site:walmart.com {product} buy",
-    "bestbuy": "site:bestbuy.com {product}",
-    "target": "site:target.com {product}",
-    "costco": "site:costco.com {product}",
-    "newegg": "site:newegg.com {product}",
-}
-
-# Deal site searches
-_DEAL_QUERIES = {
-    "slickdeals": "site:slickdeals.net {product} deal",
-    "retailmenot": "site:retailmenot.com {product} coupon",
-    "groupon": "site:groupon.com {product}",
-    "camelcamelcamel": "site:camelcamelcamel.com {product}",
-    "honey": "site:joinhoney.com {product}",
-}
-
-# Retailer display names & colors (sent to frontend)
-RETAILER_META = {
-    "walmart.com": {"name": "Walmart", "color": "#0071dc"},
-    "bestbuy.com": {"name": "Best Buy", "color": "#0046be"},
-    "target.com": {"name": "Target", "color": "#cc0000"},
-    "costco.com": {"name": "Costco", "color": "#e31837"},
-    "newegg.com": {"name": "Newegg", "color": "#f7821b"},
-    "amazon.com": {"name": "Amazon", "color": "#ff9900"},
-    "slickdeals.net": {"name": "Slickdeals", "color": "#2e8540"},
-    "retailmenot.com": {"name": "RetailMeNot", "color": "#e22a2a"},
-    "groupon.com": {"name": "Groupon", "color": "#53a318"},
-    "camelcamelcamel.com": {"name": "CamelCamelCamel", "color": "#884499"},
-    "joinhoney.com": {"name": "Honey", "color": "#ff6801"},
-    "ebay.com": {"name": "eBay", "color": "#e53238"},
-}
-
-
-_PRICE_RE = _re.compile(r"\$[\d,]+\.?\d*")
-
-
-def _enrich_result(item: dict, category: str) -> dict:
+def _enrich_result(item: dict, category: str, market: MarketConfig | None = None) -> dict:
     """Add retailer metadata, favicon, extracted price, and category tag."""
+    if market is None:
+        market = get_market()
     domain = item.get("source", "")
     # Match against known retailers
     meta = None
-    for key, val in RETAILER_META.items():
+    for key, val in market.retailer_meta.items():
         if key in domain:
             meta = val
             break
@@ -1173,30 +1170,36 @@ def _enrich_result(item: dict, category: str) -> dict:
         item["favicon"] = f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
     # Extract price from snippet text
     snippet = item.get("snippet", "") + " " + item.get("title", "")
-    price_match = _PRICE_RE.search(snippet)
+    price_re = _re.compile(market.price_regex)
+    price_match = price_re.search(snippet)
     if price_match:
         try:
-            item["extracted_price"] = float(price_match.group().replace("$", "").replace(",", ""))
+            raw = price_match.group()
+            for ch in (market.currency_symbol, "GBP", ","):
+                raw = raw.replace(ch, "")
+            item["extracted_price"] = float(raw.strip())
         except ValueError:
             pass
     return item
 
 
-async def _search_source(query_template: str, product: str, category: str, max_results: int = 3) -> list[dict]:
+async def _search_source(query_template: str, product: str, category: str, max_results: int = 3, market: MarketConfig | None = None) -> list[dict]:
     """Run a single site-scoped search and tag results."""
     query = query_template.format(product=product)
-    results = await _web_search(query, max_results)
-    return [_enrich_result(r, category) for r in results]
+    results = await _web_search(query, max_results, market)
+    return [_enrich_result(r, category, market) for r in results]
 
 
-async def fetch_retailer_prices(product_title: str, amazon_price: float | None = None) -> dict:
+async def fetch_retailer_prices(product_title: str, amazon_price: float | None = None, market: MarketConfig | None = None) -> dict:
     """
-    Search across Walmart, Best Buy, Target, Costco, Newegg for the product.
+    Search across market-specific retailers for the product.
     Returns {items: [...], price_insight: {...}}.
     """
+    if market is None:
+        market = get_market()
     tasks = [
-        _search_source(tpl, product_title, "retailer", 2)
-        for tpl in _RETAILER_QUERIES.values()
+        _search_source(tpl, product_title, "retailer", 2, market)
+        for tpl in market.retailer_queries.values()
     ]
     groups = await asyncio.gather(*tasks, return_exceptions=True)
     combined: list[dict] = []
@@ -1219,14 +1222,16 @@ async def fetch_retailer_prices(product_title: str, amazon_price: float | None =
     return {"items": combined, "price_insight": price_insight}
 
 
-async def fetch_deals(product_title: str) -> list[dict]:
+async def fetch_deals(product_title: str, market: MarketConfig | None = None) -> list[dict]:
     """
-    Search Slickdeals, RetailMeNot, Groupon, CamelCamelCamel, Honey.
+    Search market-specific deal sites.
     Returns tagged deal results.
     """
+    if market is None:
+        market = get_market()
     tasks = [
-        _search_source(tpl, product_title, "deal", 2)
-        for tpl in _DEAL_QUERIES.values()
+        _search_source(tpl, product_title, "deal", 2, market)
+        for tpl in market.deal_queries.values()
     ]
     groups = await asyncio.gather(*tasks, return_exceptions=True)
     combined: list[dict] = []
@@ -1236,13 +1241,13 @@ async def fetch_deals(product_title: str) -> list[dict]:
     return combined
 
 
-async def fetch_alternatives(product_title: str) -> list[dict]:
+async def fetch_alternatives(product_title: str, market: MarketConfig | None = None) -> list[dict]:
     """Search for alternative products across the web."""
     queries = [
         f"{product_title} best alternative 2025",
         f"{product_title} vs competitor comparison",
     ]
-    tasks = [_web_search(q, 4) for q in queries]
+    tasks = [_web_search(q, 4, market) for q in queries]
     groups = await asyncio.gather(*tasks, return_exceptions=True)
     combined: list[dict] = []
     seen_urls: set[str] = set()
@@ -1251,18 +1256,18 @@ async def fetch_alternatives(product_title: str) -> list[dict]:
             for item in group:
                 if item["url"] not in seen_urls:
                     seen_urls.add(item["url"])
-                    combined.append(_enrich_result(item, "alternative"))
+                    combined.append(_enrich_result(item, "alternative", market))
     return combined[:8]
 
 
-async def fetch_diy_articles(product_title: str) -> list[dict]:
+async def fetch_diy_articles(product_title: str, market: MarketConfig | None = None) -> list[dict]:
     """Search for DIY / repair / substitute articles."""
     queries = [
         f"{product_title} DIY repair guide",
         f"{product_title} fix yourself instead of buying",
         f"{product_title} substitute homemade",
     ]
-    tasks = [_web_search(q, 3) for q in queries]
+    tasks = [_web_search(q, 3, market) for q in queries]
     groups = await asyncio.gather(*tasks, return_exceptions=True)
     combined: list[dict] = []
     seen_urls: set[str] = set()
@@ -1271,7 +1276,7 @@ async def fetch_diy_articles(product_title: str) -> list[dict]:
             for item in group:
                 if item["url"] not in seen_urls:
                     seen_urls.add(item["url"])
-                    combined.append(_enrich_result(item, "diy"))
+                    combined.append(_enrich_result(item, "diy", market))
     return combined[:8]
 
 
@@ -1357,7 +1362,7 @@ def _tag_review(item: dict, query_type: str) -> dict:
     return item
 
 
-async def fetch_reviews(product_title: str) -> dict:
+async def fetch_reviews(product_title: str, market: MarketConfig | None = None) -> dict:
     """
     Fetch reviews from Reddit, YouTube, expert sites, and critical reviews.
     Returns:
@@ -1372,7 +1377,7 @@ async def fetch_reviews(product_title: str) -> dict:
       }
     """
     tasks = [
-        _web_search(tpl.format(product=product_title), 4)
+        _web_search(tpl.format(product=product_title), 4, market)
         for tpl, _ in _REVIEW_QUERIES
     ]
     groups = await asyncio.gather(*tasks, return_exceptions=True)

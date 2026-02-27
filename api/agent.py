@@ -12,6 +12,7 @@ from pathlib import Path
 
 import anthropic
 
+from api.market_config import MarketConfig, get_market
 from api.utils import (
     _web_search,
     compute_decision,
@@ -550,6 +551,7 @@ async def analyze_manipulation(
     decision: str,
     hist_low: float | None = None,
     avg_90d: float | None = None,
+    market: MarketConfig | None = None,
 ) -> str:
     """
     Use Claude to write a human-readable analysis of price manipulation findings.
@@ -557,9 +559,13 @@ async def analyze_manipulation(
     Returns a plain-text paragraph (3-5 sentences). Returns empty string if
     the API key is missing or the call fails.
     """
+    if market is None:
+        market = get_market()
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         return ""
+
+    sym = market.currency_symbol
 
     # Build a data summary for the prompt
     risk = manipulation_data.get("risk_level", "none")
@@ -577,16 +583,16 @@ async def analyze_manipulation(
         tactics_text += "\n"
 
     user_msg = f"""Product: {title}
-Current Price: ${current_price if current_price else 'N/A'}
-Historic Low: ${hist_low if hist_low else 'N/A'}
-90-Day Average: ${avg_90d if avg_90d else 'N/A'}
+Current Price: {sym}{current_price if current_price else 'N/A'}
+Historic Low: {sym}{hist_low if hist_low else 'N/A'}
+90-Day Average: {sym}{avg_90d if avg_90d else 'N/A'}
 TickClip Decision: {decision}
 
 Manipulation Detection Results:
 - Risk Level: {risk}
 - Manipulation Score: {score}/100
 - Is Fake Deal: {is_fake}
-- True Market Price: ${true_market if true_market else 'N/A'}
+- True Market Price: {sym}{true_market if true_market else 'N/A'}
 - Inflated By: {f'{inflated_pct:.0f}%' if inflated_pct else 'N/A'}
 
 Detected Tactics:

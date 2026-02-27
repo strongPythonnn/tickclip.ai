@@ -22,10 +22,23 @@ a:hover { text-decoration: underline; }
 .container-wide { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
 /* ── Header ── */
-header { text-align: center; padding: 48px 0 24px; }
+header { text-align: center; padding: 48px 0 24px; position: relative; }
 header h1 { font-size: 2.4rem; font-weight: 700; letter-spacing: -0.5px; }
 header h1 .g { color: #10b981; }
 header p { color: #6b7280; font-size: 1rem; margin-top: 4px; }
+
+/* ── Country Selector ── */
+.country-sel {
+  position: absolute; top: 16px; right: 20px;
+  display: flex; gap: 4px; align-items: center;
+}
+.country-btn {
+  background: #fff; border: 2px solid #e5e7eb; border-radius: 8px;
+  padding: 4px 10px; font-size: .85rem; cursor: pointer;
+  transition: all .15s; display: flex; align-items: center; gap: 4px;
+}
+.country-btn.active { border-color: #2563eb; background: #eff6ff; }
+.country-btn:hover { border-color: #93c5fd; }
 
 /* ── Search ── */
 .search-wrap { display: flex; gap: 8px; margin: 24px auto; }
@@ -500,6 +513,10 @@ footer { text-align: center; padding: 24px 0; color: #9ca3af; font-size: .75rem;
     <header>
       <h1>Tick<span class="g">Clip</span>.ai</h1>
       <p>Fiduciary AI shopping decisions — buy, wait, or skip.</p>
+      <div class="country-sel">
+        <button class="country-btn" data-market="us" onclick="setMarket('us')">&#127482;&#127480; US</button>
+        <button class="country-btn" data-market="uk" onclick="setMarket('uk')">&#127468;&#127463; UK</button>
+      </div>
     </header>
     <div class="search-wrap">
       <input id="search-input" type="text" placeholder="Search product or paste Amazon ASIN / URL..." />
@@ -553,6 +570,30 @@ const $search  = document.getElementById('search-section');
 const $eval    = document.getElementById('eval-section');
 const $content = document.getElementById('eval-content');
 
+/* ── Market auto-detection + selector ── */
+function detectMarket() {
+  const saved = localStorage.getItem('tickclip_market');
+  if (saved) return saved;
+  const lang = (navigator.language || '').toLowerCase();
+  if (lang.includes('gb') || lang.includes('uk')) return 'uk';
+  return 'us';
+}
+let currentMarket = detectMarket();
+let currencySymbol = currentMarket === 'uk' ? '\u00a3' : '$';
+
+function setMarket(code) {
+  currentMarket = code;
+  localStorage.setItem('tickclip_market', code);
+  currencySymbol = code === 'uk' ? '\u00a3' : '$';
+  document.querySelectorAll('.country-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.market === code);
+  });
+}
+// Initialise active state
+setMarket(currentMarket);
+
+function fmtP(v) { return v != null ? currencySymbol + Number(v).toFixed(2) : '\u2014'; }
+
 $input.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 
 async function doSearch() {
@@ -567,15 +608,16 @@ async function doSearch() {
   if (am) { $msg.textContent = ''; $btn.disabled = false; return doEvaluate(am[1] || q); }
 
   try {
-    const r = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}`);
+    const r = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}&market=${currentMarket}`);
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Search failed');
+    if (d.currency_symbol) currencySymbol = d.currency_symbol;
     $msg.textContent = '';
     if (!(d.results||[]).length) { $msg.textContent = 'No results found.'; return; }
     d.results.forEach(i => {
       const b = document.createElement('button');
       const dec = i.decision || 'CLIP';
-      const price = i.current_price != null ? `$${Number(i.current_price).toFixed(2)}` : '';
+      const price = i.current_price != null ? fmtP(i.current_price) : '';
       const conf = i.confidence ? `${i.confidence}% confidence` : '';
       b.innerHTML = `<span class="sr-badge ${dec}">${dec}</span>`
         + `${i.image?`<img class="sr-thumb" src="${i.image}" alt=""/>`:''}`
@@ -595,7 +637,7 @@ async function doEvaluate(asin) {
   $eval.style.display = '';
   $content.innerHTML = '<div class="msg"><span class="loader"></span>Evaluating across retailers, reviews & deal sites...</div>';
   try {
-    const r = await fetch(`${API}/api/evaluate?asin=${asin}`);
+    const r = await fetch(`${API}/api/evaluate?asin=${asin}&market=${currentMarket}`);
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Evaluation failed');
     render(d);
@@ -608,6 +650,7 @@ async function doEvaluate(asin) {
 function goBack() { $eval.style.display='none'; $content.innerHTML=''; $search.style.display=''; }
 
 function render(d) {
+  if (d.currency_symbol) currencySymbol = d.currency_symbol;
   const cc = d.decision==='TICK'?'#10b981':d.decision==='CLIP'?'#f59e0b':'#ef4444';
   const rv = d.review_analysis || {reviews:[], summary:{}};
   const sm = rv.summary || {};
@@ -643,9 +686,9 @@ function render(d) {
   const rk = d.seller_risk==='low'?'gd':d.seller_risk==='high'?'bd':'wn';
   const vk = d.volatility_score<0.08?'gd':d.volatility_score>=0.15?'bd':'wn';
   h += `<div class="metrics">
-    <div class="m"><div class="l">Current</div><div class="v">$${fmt(d.current_price)}</div></div>
-    <div class="m"><div class="l">Historic Low</div><div class="v gd">$${fmt(d.hist_low)}</div></div>
-    <div class="m"><div class="l">90-Day Avg</div><div class="v">$${fmt(d.avg_90d)}</div></div>
+    <div class="m"><div class="l">Current</div><div class="v">${fmtP(d.current_price)}</div></div>
+    <div class="m"><div class="l">Historic Low</div><div class="v gd">${fmtP(d.hist_low)}</div></div>
+    <div class="m"><div class="l">90-Day Avg</div><div class="v">${fmtP(d.avg_90d)}</div></div>
     <div class="m"><div class="l">Volatility</div><div class="v ${vk}">${d.volatility_score!=null?(d.volatility_score*100).toFixed(1)+'%':'—'}</div></div>
     <div class="m"><div class="l">Seller Risk</div><div class="v ${rk}" style="text-transform:capitalize">${d.seller_risk}</div></div>
   </div>`;
@@ -735,9 +778,9 @@ function render(d) {
   if (d.price_insight && (d.price_insight.lowest_found || d.price_insight.savings_vs_amazon)) {
     const pi = d.price_insight;
     h += `<div class="price-compare-card"><h3>Price Comparison</h3>`;
-    if (d.current_price) h += `<div class="pc-row"><span class="pc-label">Amazon</span><span class="pc-value">$${fmt(d.current_price)}</span></div>`;
-    if (pi.lowest_found) h += `<div class="pc-row"><span class="pc-label">${esc(pi.best_retailer||'Best Price')}</span><span class="pc-value" style="color:#10b981">$${fmt(pi.lowest_found)}</span></div>`;
-    if (pi.savings_vs_amazon > 0) h += `<div class="pc-savings">Save $${fmt(pi.savings_vs_amazon)} at ${esc(pi.best_retailer||'another retailer')}</div>`;
+    if (d.current_price) h += `<div class="pc-row"><span class="pc-label">Amazon</span><span class="pc-value">${fmtP(d.current_price)}</span></div>`;
+    if (pi.lowest_found) h += `<div class="pc-row"><span class="pc-label">${esc(pi.best_retailer||'Best Price')}</span><span class="pc-value" style="color:#10b981">${fmtP(pi.lowest_found)}</span></div>`;
+    if (pi.savings_vs_amazon > 0) h += `<div class="pc-savings">Save ${fmtP(pi.savings_vs_amazon)} at ${esc(pi.best_retailer||'another retailer')}</div>`;
     h += `</div>`;
   }
 
@@ -750,7 +793,7 @@ function render(d) {
         <div class="sl-top">
           ${a.favicon?`<img class="sl-favicon" src="${a.favicon}" alt=""/>`:''}
           <span class="sl-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span>
-          ${a.extracted_price?`<span class="sl-price-tag">$${fmt(a.extracted_price)}</span>`:''}
+          ${a.extracted_price?`<span class="sl-price-tag">${fmtP(a.extracted_price)}</span>`:''}
           ${a.rating?`<span class="sl-rating">${'&#9733;'.repeat(Math.round(a.rating))} ${a.rating}${a.rating_count?' ('+a.rating_count+')':''}</span>`:''}
         </div>
         <div class="sl-title">${esc(a.title)}</div>
@@ -769,7 +812,7 @@ function render(d) {
         <div class="sl-top">
           ${a.favicon?`<img class="sl-favicon" src="${a.favicon}" alt=""/>`:''}
           <span class="sl-badge" style="background:${a.retailer_color||'#6b7280'}">${esc(a.retailer_name||a.source)}</span>
-          ${a.extracted_price?`<span class="sl-price-tag">$${fmt(a.extracted_price)}</span>`:''}
+          ${a.extracted_price?`<span class="sl-price-tag">${fmtP(a.extracted_price)}</span>`:''}
           ${a.date?`<span class="sl-date">${esc(a.date)}</span>`:''}
         </div>
         <div class="sl-title">${esc(a.title)}</div>
@@ -831,7 +874,7 @@ function render(d) {
   // Quick Links
   h += `<div class="side-section"><h3>Quick Links</h3><div class="quick-links">`;
   if (d.amazon_url) h += `<a href="${esc(d.amazon_url)}" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128722;</span>View on Amazon</a>`;
-  h += `<a href="https://camelcamelcamel.com/product/${d.asin}" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128200;</span>CamelCamelCamel Price History</a>`;
+  h += `<a href="https://${d.camel_base||'camelcamelcamel.com'}/product/${d.asin}" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128200;</span>CamelCamelCamel Price History</a>`;
   const gq = encodeURIComponent(d.title + ' best price');
   h += `<a href="https://www.google.com/search?q=${gq}&tbm=shop" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128269;</span>Google Shopping</a>`;
   h += `<a href="https://www.google.com/search?q=${encodeURIComponent(d.title + ' review')}" target="_blank" rel="noopener" class="ql-link"><span class="ql-icon">&#128196;</span>Search Reviews</a>`;
@@ -957,11 +1000,11 @@ function renderManipulation(pm, currentPrice, aiAnalysis) {
     h += `<div class="manip-prices">
       <div class="manip-price current-bg">
         <div class="mp-label">Listed Price</div>
-        <div class="mp-val">$${fmt(currentPrice)}</div>
+        <div class="mp-val">${fmtP(currentPrice)}</div>
       </div>
       <div class="manip-price true-bg">
         <div class="mp-label">True Market Price</div>
-        <div class="mp-val" style="color:#10b981">$${fmt(pm.true_market_price)}</div>
+        <div class="mp-val" style="color:#10b981">${fmtP(pm.true_market_price)}</div>
       </div>`;
     if (pm.inflated_by_pct != null && pm.inflated_by_pct > 0) {
       h += `<div class="manip-price inflated-bg">
@@ -1009,7 +1052,7 @@ function buildChart(series, color) {
   const line=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
   const area=line+` L${pts[pts.length-1].x.toFixed(1)},${PT+ch} L${pts[0].x.toFixed(1)},${PT+ch} Z`;
   let yL=''; for(let i=0;i<=4;i++){const v=mn+(rng*i/4),y=PT+ch-(i/4)*ch;
-    yL+=`<text x="${PL-7}" y="${y+4}" text-anchor="end" fill="#9ca3af" font-size="10">$${v.toFixed(0)}</text>`;
+    yL+=`<text x="${PL-7}" y="${y+4}" text-anchor="end" fill="#9ca3af" font-size="10">${currencySymbol}${v.toFixed(0)}</text>`;
     yL+=`<line x1="${PL}" x2="${PL+cw}" y1="${y}" y2="${y}" stroke="#f3f4f6"/>`;
   }
   let xL='';[0,Math.floor(series.length/2),series.length-1].forEach(i=>{
@@ -1125,6 +1168,7 @@ async function sendChat() {
         message: msg,
         asin: currentAsin,
         history: chatHistory.slice(-10),
+        market: currentMarket,
       }),
     });
     const data = await resp.json();
